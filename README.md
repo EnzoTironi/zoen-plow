@@ -51,6 +51,15 @@ deletes it, so the next boot starts with fresh agent state.
 Set `PLOW_API_BASE` to the API root without `/v1`. Local runs also need
 `PLOW_AGENT_TOKEN`; cloud hosts can inject it. Use an API endpoint you control.
 Agent state lives in the persistent `/var/lib/plow` volume.
+
+Set `AGENT_ID` to the Agent Index id to put this agent on
+[the index](https://aiworthusing.com/agent-index): boot then registers the listing
+and reports its token usage every five minutes, with `AGENT_NAME` and `AGENT_BLURB`
+sent along when they are set. The client is
+[agent-index-client](https://github.com/plow-pbc/agent-index-client), pinned in
+`vendor/client.pin` and fetched at build; its key and ledger live in the state
+volume, so a rebuilt container keeps one install rather than registering a second.
+Without `AGENT_ID` there is nothing to report for and nothing runs.
 `openclaw.json` is boot-owned: runtime config edits (`config set`, `set-identity` emoji/avatar changes, and plugin installs) do not survive a restart.
 Workspace `BOOTSTRAP.md`, `SOUL.md`, `IDENTITY.md`, and `USER.md` are also boot-owned
 and removed at every startup; `AGENTS.md` is boot-rendered.
