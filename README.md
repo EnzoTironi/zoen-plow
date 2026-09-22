@@ -59,8 +59,8 @@ token usage every five minutes. That usage reads zero on this base today: the
 client collects from agentsview or a Hermes store, and neither covers OpenClaw
 sessions, so a listing from here shows up with no tokens until an OpenClaw
 collector lands in the client (or the image you build adds one of those sources). The client is
-[agent-index-client](https://github.com/plow-pbc/agent-index-client), pinned in
-`vendor/client.pin` and fetched at build; its key and ledger live in the state
+[agent-index-client](https://github.com/plow-pbc/agent-index-client), pinned by
+commit and checksum in the `Dockerfile` and fetched at build; its key and ledger live in the state
 volume, so a rebuilt container keeps one install rather than registering a second.
 Without `AGENT_ID` there is nothing to report for and nothing runs.
 `openclaw.json` is boot-owned: runtime config edits (`config set`, `set-identity` emoji/avatar changes, and plugin installs) do not survive a restart.
