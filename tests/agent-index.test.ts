@@ -3,7 +3,10 @@ import childProcess, { type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import { test } from "node:test";
-import { startAgentIndex } from "../boot/agent-index.ts";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { linkSessions, startAgentIndex } from "../boot/agent-index.ts";
 
 /** Answers each client call with the exit code the case is about, and records what it was asked to run. */
 function fakeClient(t: import("node:test").TestContext, codes: number[]) {
@@ -68,4 +71,13 @@ test("unreadable state stands off rather than registering over it", async t => {
   startAgentIndex()?.close?.();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.deepEqual(calls.map(call => call.args), [["status"]], "registering mints against a new install id and strands published usage");
+});
+
+test("the collector is pointed at OpenClaw's sessions, and stays pointed", async () => {
+  const state = await fs.mkdtemp(path.join(os.tmpdir(), "plow-state-"));
+  await linkSessions(state);
+  await linkSessions(state);   // every pass calls it; the second must not throw
+  assert.equal(await fs.readlink(`${state}/.openclaw/agents`), `${state}/agents`,
+    "a link to the state root would contain itself, and a collector walking it would not stop");
+  await fs.rm(state, { recursive: true, force: true });
 });
