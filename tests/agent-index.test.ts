@@ -75,8 +75,8 @@ test("unreadable state stands off rather than registering over it", async t => {
 
 test("the collector is pointed at OpenClaw's sessions, and stays pointed", async () => {
   const state = await fs.mkdtemp(path.join(os.tmpdir(), "plow-state-"));
-  await linkSessions(state);
-  await linkSessions(state);   // every pass calls it; the second must not throw
+  linkSessions(state);
+  linkSessions(state);   // every boot calls it; the second must not throw
   assert.equal(await fs.readlink(`${state}/.openclaw/agents`), `${state}/agents`,
     "a link to the state root would contain itself, and a collector walking it would not stop");
   await fs.rm(state, { recursive: true, force: true });

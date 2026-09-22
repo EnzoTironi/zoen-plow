@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, symlink } from "node:fs/promises";
+import { mkdirSync, symlinkSync } from "node:fs";
 
 const CLIENT = "/opt/plow/agent-index-client.py";
 
@@ -9,10 +9,10 @@ const CLIENT = "/opt/plow/agent-index-client.py";
  * link names the sessions directory rather than the state root: a link to the
  * root would contain itself, and a collector walking it would not stop.
  */
-export async function linkSessions(state = "/var/lib/plow") {
+export function linkSessions(state = "/var/lib/plow") {
   try {
-    await mkdir(`${state}/.openclaw`, { recursive: true });
-    await symlink(`${state}/agents`, `${state}/.openclaw/agents`);
+    mkdirSync(`${state}/.openclaw`, { recursive: true });
+    symlinkSync(`${state}/agents`, `${state}/.openclaw/agents`);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
       console.error(`agent-index: no session link, usage will read zero: ${(error as Error).message}`);
@@ -52,7 +52,6 @@ export function startAgentIndex(interval = 300_000) {
     child.on("close", code => resolve(code ?? 1));
   });
   const pass = async () => {
-    await linkSessions();
     // 0 registered, 3 not registered, 2 state is there and unreadable. 2 is not
     // 3: registering over state the client cannot read mints against a new
     // install id and strands this install's published usage.
@@ -68,6 +67,9 @@ export function startAgentIndex(interval = 300_000) {
     }
     if (await run(["--agent", agent])) console.error("agent-index: reporter exited non-zero, see the line above");
   };
+  // Once, before the first pass: a report spawns the collector, and a link
+  // made concurrently with it would land after the walk it is there for.
+  linkSessions();
   void pass();
   // Never fatal, and never a reason to hold the process open: the gateway is
   // what this container is for.
