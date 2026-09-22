@@ -6,6 +6,11 @@ const CLIENT = "/opt/plow/agent-index-client.py";
 // five minutes, the contract the Hermes base runs as an s6 service. This image
 // has no supervision tree of its own, so the boot process owns the schedule.
 //
+// The usage half reads zero on this base today: the client collects from
+// agentsview or a Hermes store, and neither covers OpenClaw sessions. The pass
+// still runs -- it is what carries the listing's registration retry, and an
+// image built from this one that adds either source reports through it.
+//
 // No switch. The reporter is here because this image carries it; an owner who
 // does not want their usage on the Index builds without AGENT_ID, and then
 // there is nothing to report for and this stands down.

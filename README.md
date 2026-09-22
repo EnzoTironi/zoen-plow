@@ -53,9 +53,12 @@ Set `PLOW_API_BASE` to the API root without `/v1`. Local runs also need
 Agent state lives in the persistent `/var/lib/plow` volume.
 
 Set `AGENT_ID` to the Agent Index id to put this agent on
-[the index](https://aiworthusing.com/agent-index): boot then registers the listing
-and reports its token usage every five minutes, with `AGENT_NAME` and `AGENT_BLURB`
-sent along when they are set. The client is
+[the index](https://aiworthusing.com/agent-index): boot then registers the listing,
+with `AGENT_NAME` and `AGENT_BLURB` sent along when they are set, and reports its
+token usage every five minutes. That usage reads zero on this base today: the
+client collects from agentsview or a Hermes store, and neither covers OpenClaw
+sessions, so a listing from here shows up with no tokens until an OpenClaw
+collector lands in the client (or the image you build adds one of those sources). The client is
 [agent-index-client](https://github.com/plow-pbc/agent-index-client), pinned in
 `vendor/client.pin` and fetched at build; its key and ledger live in the state
 volume, so a rebuilt container keeps one install rather than registering a second.
