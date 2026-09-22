@@ -1,15 +1,33 @@
 import { spawn } from "node:child_process";
+import { mkdirSync, symlinkSync } from "node:fs";
 
 const CLIENT = "/opt/plow/agent-index-client.py";
+
+/** Put OpenClaw's sessions where agentsview looks for them.
+ *
+ * HOME is the state volume, so `~` resolves there for the collector too. The
+ * link names the sessions directory rather than the state root: a link to the
+ * root would contain itself, and a collector walking it would not stop.
+ */
+export function linkSessions(state = "/var/lib/plow") {
+  try {
+    mkdirSync(`${state}/.openclaw`, { recursive: true });
+    symlinkSync(`${state}/agents`, `${state}/.openclaw/agents`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      console.error(`agent-index: no session link, usage will read zero: ${(error as Error).message}`);
+    }
+  }
+}
 
 // Registers this agent on the Agent Index and reports its token usage every
 // five minutes, the contract the Hermes base runs as an s6 service. This image
 // has no supervision tree of its own, so the boot process owns the schedule.
 //
-// The usage half reads zero on this base today: the client collects from
-// agentsview or a Hermes store, and neither covers OpenClaw sessions. The pass
-// still runs -- it is what carries the listing's registration retry, and an
-// image built from this one that adds either source reports through it.
+// Usage comes from agentsview, which this image installs and which reads
+// OpenClaw's own sessions -- at ~/.openclaw/agents, the path OpenClaw uses
+// when OPENCLAW_STATE_DIR is unset. This image does set it, so the link below
+// is what puts the sessions back where the collector looks.
 //
 // No switch. The reporter is here because this image carries it; an owner who
 // does not want their usage on the Index builds without AGENT_ID, and then
@@ -49,6 +67,9 @@ export function startAgentIndex(interval = 300_000) {
     }
     if (await run(["--agent", agent])) console.error("agent-index: reporter exited non-zero, see the line above");
   };
+  // Once, before the first pass: a report spawns the collector, and a link
+  // made concurrently with it would land after the walk it is there for.
+  linkSessions();
   void pass();
   // Never fatal, and never a reason to hold the process open: the gateway is
   // what this container is for.
