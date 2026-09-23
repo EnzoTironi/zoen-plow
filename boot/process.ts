@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
-import { variantProgram } from "./variant.js";
 
-export async function startGateway(captureOutput = false, mcpUrl?: string, variant = variantProgram()) {
+export async function startGateway(captureOutput = false, mcpUrl?: string, variant?: string) {
   const children = new Set<ChildProcess>();
   let stopping = false;
   let restartTimer: NodeJS.Timeout | undefined;

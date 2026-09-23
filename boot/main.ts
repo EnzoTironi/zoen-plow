@@ -5,6 +5,7 @@ import { renderConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
+import { variantProgram } from "./variant.js";
 
 try {
   const base = process.env.PLOW_API_BASE?.replace(/\/$/, "");
@@ -23,7 +24,9 @@ try {
   await writeFile("/var/lib/plow/openclaw.json", JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
   startAgentIndex();
-  await startGateway(false, identity.mcp_url ?? undefined);
+  // Only a real boot runs a variant's own work: the offline probe validates
+  // the image, and starting a builder's worker to do that is not validation.
+  await startGateway(false, identity.mcp_url ?? undefined, variantProgram());
 } catch (error) {
   console.error(`plow-boot: parked: ${error instanceof Error ? error.message : String(error)}`);
   setInterval(() => {}, 2 ** 30);
