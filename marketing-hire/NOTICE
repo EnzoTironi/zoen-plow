@@ -1,0 +1,7 @@
+The playbooks in skills/marketing-playbooks/library/ are adapted from
+https://github.com/msitarzewski/agency-agents at commit
+053ddbbf392a1688fc7043d81529f47ef2cf86c8, marketing division only.
+
+That project is MIT License, Copyright (c) 2025 AgentLand Contributors.
+Identity, communication-style, and handoff sections were removed so one hire
+follows the procedures without taking on those personas.
