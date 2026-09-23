@@ -57,7 +57,8 @@ Set `AGENT_ID` to the Agent Index id to put this agent on
 with `AGENT_NAME` and `AGENT_BLURB` sent along when they are set, and reports its
 token usage every five minutes. The counts come from agentsview, which this
 image installs and which reads OpenClaw's own sessions; boot links them where
-it looks, since this image moves OpenClaw's state off `~/.openclaw`. The client is
+it looks, since this image moves OpenClaw's state off `~/.openclaw`, and each
+pass refreshes the collector before reporting. The client is
 [agent-index-client](https://github.com/plow-pbc/agent-index-client), pinned by
 commit and checksum in the `Dockerfile` and fetched at build; its key and ledger live in the state
 volume, so a rebuilt container keeps one install rather than registering a second.
