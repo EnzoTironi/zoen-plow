@@ -51,7 +51,16 @@ export function startAgentIndex(interval = 300_000) {
     child.on("error", error => { console.error(`agent-index: ${error.message}`); resolve(1); });
     child.on("close", code => resolve(code ?? 1));
   });
+  // agentsview answers `usage daily` out of its own database and fills that
+  // database only when told to: without this the collector is installed, the
+  // sessions are linked, and every report is still a day of zeros.
+  const sync = () => new Promise<void>(resolve => {
+    const child = spawn("agentsview", ["sync"], { stdio: ["ignore", "ignore", "inherit"], env: { PATH: process.env.PATH!, HOME: "/var/lib/plow" } });
+    child.on("error", error => { console.error(`agent-index: no collector sync, usage will read zero: ${error.message}`); resolve(); });
+    child.on("close", () => resolve());
+  });
   const pass = async () => {
+    await sync();
     // 0 registered, 3 not registered, 2 state is there and unreadable. 2 is not
     // 3: registering over state the client cannot read mints against a new
     // install id and strands this install's published usage.

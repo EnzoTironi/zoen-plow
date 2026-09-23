@@ -12,7 +12,9 @@ import { linkSessions, startAgentIndex } from "../boot/agent-index.ts";
 function fakeClient(t: import("node:test").TestContext, codes: number[]) {
   const calls: { args: string[]; env: Record<string, string | undefined> }[] = [];
   t.mock.method(childProcess, "spawn", (_command: string, args: string[], options: SpawnOptions) => {
-    calls.push({ args: args.slice(1), env: options.env as Record<string, string | undefined> });
+    // The client is run as `python3 <client> …`; the collector as `agentsview …`.
+    // Recording the collector under its own name keeps both readable in one list.
+    calls.push({ args: _command === "python3" ? args.slice(1) : [_command, ...args], env: options.env as Record<string, string | undefined> });
     const child = Object.assign(new EventEmitter(), { kill() {} });
     queueMicrotask(() => child.emit("close", codes.shift() ?? 0, null));
     return child;
@@ -37,40 +39,42 @@ test("no AGENT_ID reports for nobody, so nothing runs", async t => {
 
 test("an unregistered install registers, then reports", async t => {
   env(t, { AGENT_ID: "my-agent", AGENT_NAME: "My Agent", AGENT_BLURB: "What it does", PLOW_API_BASE: "https://api.example", PLOW_AGENT_TOKEN: "token" });
-  const calls = fakeClient(t, [3, 0, 0]);
+  const calls = fakeClient(t, [0, 3, 0, 0]);
   startAgentIndex()?.close?.();
   await new Promise(resolve => setTimeout(resolve, 10));
   assert.deepEqual(calls.map(call => call.args), [
+    ["agentsview", "sync"],
     ["status"],
     ["--register", "--agent", "my-agent", "--name", "My Agent", "--blurb", "What it does"],
     ["--agent", "my-agent"],
   ]);
   // The Plow bearer buys the Index key once; reports go out on the key the client stored.
-  assert.equal(calls[1].env.PLOW_AGENT_TOKEN, "token");
-  assert.equal(calls[2].env.PLOW_AGENT_TOKEN, undefined);
+  assert.equal(calls[2].env.PLOW_AGENT_TOKEN, "token");
+  assert.equal(calls[3].env.PLOW_AGENT_TOKEN, undefined);
   // The state volume, not the container's /home/node: a key and ledger that do
   // not survive a recreate re-register as a new install.
-  assert.deepEqual(calls.map(call => call.env.HOME), ["/var/lib/plow", "/var/lib/plow", "/var/lib/plow"]);
+  assert.deepEqual(calls.map(call => call.env.HOME), ["/var/lib/plow", "/var/lib/plow", "/var/lib/plow", "/var/lib/plow"]);
   // Named, never the client's compiled-in api.plow.co: a cloud agent's token is
   // a placeholder its proxy swaps, and sent past the proxy it is refused.
-  assert.deepEqual(calls.map(call => call.env.PLOW_API_BASE), ["https://api.example", "https://api.example", "https://api.example"]);
+  assert.deepEqual(calls.slice(1).map(call => call.env.PLOW_API_BASE), ["https://api.example", "https://api.example", "https://api.example"]);
 });
 
 test("a registered install only reports", async t => {
   env(t, { AGENT_ID: "my-agent", AGENT_NAME: undefined, AGENT_BLURB: undefined, PLOW_API_BASE: "https://api.example" });
-  const calls = fakeClient(t, [0, 0]);
+  const calls = fakeClient(t, [0, 0, 0]);
   startAgentIndex()?.close?.();
   await new Promise(resolve => setTimeout(resolve, 10));
-  assert.deepEqual(calls.map(call => call.args), [["status"], ["--agent", "my-agent"]]);
+  assert.deepEqual(calls.map(call => call.args), [["agentsview", "sync"], ["status"], ["--agent", "my-agent"]],
+    "the collector fills its database only when told to; reporting first posts a day of zeros");
 });
 
 test("unreadable state stands off rather than registering over it", async t => {
   env(t, { AGENT_ID: "my-agent", PLOW_API_BASE: "https://api.example" });
   t.mock.method(console, "error", () => {});
-  const calls = fakeClient(t, [2]);
+  const calls = fakeClient(t, [0, 2]);
   startAgentIndex()?.close?.();
   await new Promise(resolve => setTimeout(resolve, 10));
-  assert.deepEqual(calls.map(call => call.args), [["status"]], "registering mints against a new install id and strands published usage");
+  assert.deepEqual(calls.map(call => call.args), [["agentsview", "sync"], ["status"]], "registering mints against a new install id and strands published usage");
 });
 
 test("the collector is pointed at OpenClaw's sessions, and stays pointed", async () => {
