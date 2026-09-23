@@ -15,9 +15,13 @@ plow-agents login
 plow-agents lines
 ```
 
-No official image is published yet. For Plow's cloud host, first clone this repo,
-then build and push from its root to a registry you control. Authenticate Docker
-with that registry and make the image publicly pullable by Plow:
+This image is published as
+`public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>@sha256:<digest>`, one
+immutable tag per commit of this repository — pinned by digest, because a tag
+is a name someone can move, and the code it names boots holding this agent's
+Plow credential. An agent built on it is a `FROM` line plus its own content — see [Building a variant image](#building-a-variant-image). Build
+and push your variant to a registry you control, make it publicly pullable by
+Plow, and deploy it:
 
 ```sh
 plow-agents image build REGISTRY/REPOSITORY:TAG
@@ -25,7 +29,8 @@ plow-agents image push REGISTRY/REPOSITORY:TAG
 plow-agents deploy REGISTRY/REPOSITORY@sha256:DIGEST --line LINE_UID
 ```
 
-Use the full digest reference printed by push and the selected line ID.
+Use the full digest reference printed by push and the selected line ID — for
+your image and for the base you build on alike.
 
 To build and run locally, clone this repository and run these commands from its
 root. By default, mint writes `plow-credentials` in the current directory;
@@ -100,6 +105,41 @@ Mac provides its tools and instructions. Mac unavailability does not prevent
 texting. Long-running MCP responses stream without a fixed bridge timeout;
 client disconnects cancel the upstream request. A bridge crash restarts the
 bridge while the gateway continues.
+
+## Building a variant image
+
+A variant is a persona, prompt and skills — a separate repository whose
+Dockerfile starts from this image and adds nothing else:
+
+```dockerfile
+FROM public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>@sha256:<digest>
+
+# Which agent this reports as on the Agent Index. A cloud install runs the
+# image with no compose file, so this is the only place the id can come from,
+# and without it nothing is reported and no page is claimed.
+ENV AGENT_ID=your-agent-id
+
+COPY prompt/AGENTS.md /opt/plow/prompt/AGENTS.md
+COPY skills/ /opt/plow/skills/
+```
+
+**Do not carry your own usage reporter.** This image owns that: it registers
+the listing, reads OpenClaw's transcripts and reports every five minutes, and
+it is the one copy we fix when OpenClaw changes where it keeps them. A variant
+that ships its own reporter — or its own `boot/`, entrypoint or `CMD` — is on
+its own the next time that happens, which has already cost builders a week of
+zeros on the board.
+
+## Publishing
+
+Published by CI in `plow-pbc/plow`
+(`.github/workflows/build-agent-image.yml`), one immutable tag per commit:
+`public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<full commit sha>`. There is no
+`latest`, and the tag names the commit of this repository that built the
+image. A variant lives in the registry its builder controls, pushed by
+`plow-agents image push`. The tags that exist here are readable from the
+registry itself:
+<https://gallery.ecr.aws/e1h7x4a2/plow-cloud-agents>.
 
 ## Trust
 
