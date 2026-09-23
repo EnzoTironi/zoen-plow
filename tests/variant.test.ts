@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
-import childProcess from "node:child_process";
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { startVariant } from "../boot/variant.ts";
+import { variantProgram } from "../boot/variant.ts";
 
-/** An image with no variant program, and one with an executable program. */
+/** An image with no variant program, and one with a file at that path. */
 function program(t: import("node:test").TestContext, mode?: number) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "plow-variant-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -17,34 +14,17 @@ function program(t: import("node:test").TestContext, mode?: number) {
   return start;
 }
 
-function spawned(t: import("node:test").TestContext) {
-  const calls: string[] = [];
-  t.mock.method(childProcess, "spawn", (command: string) => {
-    calls.push(command);
-    return Object.assign(new EventEmitter(), { kill() {} });
-  });
-  syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-  return calls;
-}
-
-test("an image without a variant program starts nothing", t => {
-  const calls = spawned(t);
-  assert.equal(startVariant(program(t)), undefined);
-  assert.deepEqual(calls, []);
+test("an image without a variant program has none to run", t => {
+  assert.equal(variantProgram(program(t)), undefined);
 });
 
-test("a file that is not executable is not a program to run", t => {
-  const calls = spawned(t);
+test("a file that is not executable is not a program", t => {
   // Refusing it here is the difference between a clear no-op and a spawn that
   // fails at exec time on every boot.
-  assert.equal(startVariant(program(t, 0o644)), undefined);
-  assert.deepEqual(calls, []);
+  assert.equal(variantProgram(program(t, 0o644)), undefined);
 });
 
-test("an executable variant program is started beside the gateway", t => {
-  const calls = spawned(t);
+test("an executable at that path is the program to run", t => {
   const start = program(t, 0o755);
-  assert.ok(startVariant(start));
-  assert.deepEqual(calls, [start]);
+  assert.equal(variantProgram(start), start);
 });
