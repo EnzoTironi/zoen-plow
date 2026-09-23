@@ -16,9 +16,10 @@ plow-agents lines
 ```
 
 This image is published as
-`public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>`, one immutable tag per
-commit of this repository, so an agent built on it is a `FROM` line plus its
-own content — see [Building a variant image](#building-a-variant-image). Build
+`public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>@sha256:<digest>`, one
+immutable tag per commit of this repository — pinned by digest, because a tag
+is a name someone can move, and the code it names boots holding this agent's
+Plow credential. An agent built on it is a `FROM` line plus its own content — see [Building a variant image](#building-a-variant-image). Build
 and push your variant to a registry you control, make it publicly pullable by
 Plow, and deploy it:
 
@@ -28,8 +29,8 @@ plow-agents image push REGISTRY/REPOSITORY:TAG
 plow-agents deploy REGISTRY/REPOSITORY@sha256:DIGEST --line LINE_UID
 ```
 
-Use the full digest reference printed by push and the selected line ID. To try
-the base by itself, deploy its published tag instead.
+Use the full digest reference printed by push and the selected line ID — for
+your image and for the base you build on alike.
 
 To build and run locally, clone this repository and run these commands from its
 root. By default, mint writes `plow-credentials` in the current directory;
@@ -111,7 +112,7 @@ A variant is a persona, prompt and skills — a separate repository whose
 Dockerfile starts from this image and adds nothing else:
 
 ```dockerfile
-FROM public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>
+FROM public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>@sha256:<digest>
 
 # Which agent this reports as on the Agent Index. A cloud install runs the
 # image with no compose file, so this is the only place the id can come from,
