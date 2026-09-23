@@ -135,9 +135,10 @@ zeros on the board.
 Published by CI in `plow-pbc/plow`
 (`.github/workflows/build-agent-image.yml`), one immutable tag per commit:
 `public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<full commit sha>`. There is no
-`latest`, and the tag names the commit that built it — this repository's for
-the base image, the variant's own for a variant, since one registry repository
-holds both. The tags that exist are readable from the registry itself:
+`latest`, and the tag names the commit of this repository that built the
+image. A variant lives in the registry its builder controls, pushed by
+`plow-agents image push`. The tags that exist here are readable from the
+registry itself:
 <https://gallery.ecr.aws/e1h7x4a2/plow-cloud-agents>.
 
 ## Trust
