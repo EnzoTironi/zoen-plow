@@ -108,8 +108,7 @@ bridge while the gateway continues.
 
 ## Building a variant image
 
-A variant is a persona, prompt and skills — a separate repository whose
-Dockerfile starts from this image and adds nothing else:
+For a persona, prompt and skills, build a separate image on this base:
 
 ```dockerfile
 FROM public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>@sha256:<digest>
@@ -123,23 +122,13 @@ COPY prompt/AGENTS.md /opt/plow/prompt/AGENTS.md
 COPY skills/ /opt/plow/skills/
 ```
 
-A variant that has work of its own — a worker, a scheduler, a digest — ships
-one executable at `/opt/plow/variant/start`, which boot runs beside the
-gateway:
+Keep the inherited boot and reporter to use Plow's maintained reporting: it
+registers the listing, reads OpenClaw's transcripts and reports every five
+minutes. Rebuild on an updated base digest to pick up fixes.
 
-```dockerfile
-COPY --chmod=0755 start /opt/plow/variant/start
-```
-
-It is started, not supervised: it owns its own restarts, and its failure is
-logged rather than fatal, because the agent answering its owner does not depend
-on it.
-
-**Do not carry your own usage reporter, boot or entrypoint.** This image owns those: it registers
-the listing, reads OpenClaw's transcripts and reports every five minutes, and
-it is the one copy we fix when OpenClaw changes where it keeps them. A variant
-that forks them is on its own the next time that happens, which has already
-cost builders a week of zeros on the board.
+If you need different startup behavior, fork this repository and maintain those
+changes, including reporting. Free hosting requires working usage reporting
+from the deployed image, whether it inherits this base or is a fork.
 
 ## Publishing
 
