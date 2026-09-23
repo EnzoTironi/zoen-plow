@@ -54,6 +54,9 @@ test("an unregistered install registers, then reports", async t => {
   // The state volume, not the container's /home/node: a key and ledger that do
   // not survive a recreate re-register as a new install.
   assert.deepEqual(calls.map(call => call.env.HOME), ["/var/lib/plow", "/var/lib/plow", "/var/lib/plow", "/var/lib/plow"]);
+  // Told where the store is, so the reporter never depends on the link alone.
+  assert.deepEqual(calls.slice(1).map(call => call.env.OPENCLAW_STATE_DIR),
+    ["/var/lib/plow", "/var/lib/plow", "/var/lib/plow"]);
   // Named, never the client's compiled-in api.plow.co: a cloud agent's token is
   // a placeholder its proxy swaps, and sent past the proxy it is refused.
   assert.deepEqual(calls.slice(1).map(call => call.env.PLOW_API_BASE), ["https://api.example", "https://api.example", "https://api.example"]);
