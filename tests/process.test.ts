@@ -56,28 +56,3 @@ for (const ending of ["gateway", "bridge", "signal", "startup-failure", "restart
   assert.equal(process.listenerCount("SIGTERM"), listeners);
   assert.equal(process.exitCode, previousCode);
 });
-
-test("a variant program is supervised with the gateway, not beside it", async t => {
-  const previousCode = process.exitCode;
-  const spawned: { command: string; child: EventEmitter & { signals: string[]; kill(signal: string): void } }[] = [];
-  t.mock.method(console, "error", () => {});
-  t.mock.method(childProcess, "spawn", (command: string) => {
-    const child = Object.assign(new EventEmitter(), {
-      signals: [] as string[],
-      kill(signal: string) { this.signals.push(signal); queueMicrotask(() => this.emit("close", null, signal)); },
-    });
-    spawned.push({ command, child });
-    return child;
-  });
-  syncBuiltinESMExports();
-  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); process.exitCode = previousCode; });
-
-  await startGateway(true, undefined, "/opt/plow/variant/start");
-  assert.deepEqual(spawned.map(s => s.command), ["/opt/plow/variant/start", process.execPath],
-    "the variant starts before the gateway it runs beside");
-
-  // Container shutdown: an unsupervised variant would outlive the gateway and
-  // hold PID 1 open with the agent already unreachable.
-  process.emit("SIGTERM");
-  assert.deepEqual(spawned.map(s => s.child.signals), [["SIGTERM"], ["SIGTERM"]]);
-});

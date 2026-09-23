@@ -26,6 +26,13 @@ export async function startGateway(captureOutput = false, mcpUrl?: string, varia
         restartTimer = setTimeout(startBridge, 1000);
         return;
       }
+      // A variant's own work is not what this container is for: it is started
+      // here so shutdown reaches it, but its exit -- clean or not -- must not
+      // take the gateway, and so the owner's agent, down with it.
+      if (label === "variant" && !stopping) {
+        if (code || signal) console.error(`plow-boot: variant exited code=${code} signal=${signal}`);
+        return;
+      }
       if (!stopping && (code || signal)) {
         console.error(`plow-boot: ${label} exited code=${code} signal=${signal}`);
         process.exitCode = code || 1;
