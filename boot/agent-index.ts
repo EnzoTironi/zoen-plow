@@ -46,7 +46,12 @@ export function startAgentIndex(interval = 300_000) {
   const run = (args: string[], token?: string) => new Promise<number>(resolve => {
     const child = spawn("python3", [CLIENT, ...args], {
       stdio: ["ignore", "ignore", "inherit"],
-      env: { PATH: process.env.PATH!, HOME: "/var/lib/plow", AGENT_ID: agent, PLOW_API_BASE: process.env.PLOW_API_BASE!, ...(token ? { PLOW_AGENT_TOKEN: token } : {}) },
+      // OPENCLAW_STATE_DIR names the store the client reads. Told, not left to
+      // find it through the link below: this env is built rather than
+      // inherited, and a client that finds nothing at its GUESSED default
+      // reports a day of zeros without calling it a failure -- silence being
+      // the correct answer for a machine that simply does not run OpenClaw.
+      env: { PATH: process.env.PATH!, HOME: "/var/lib/plow", OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR!, AGENT_ID: agent, PLOW_API_BASE: process.env.PLOW_API_BASE!, ...(token ? { PLOW_AGENT_TOKEN: token } : {}) },
     });
     child.on("error", error => { console.error(`agent-index: ${error.message}`); resolve(1); });
     child.on("close", code => resolve(code ?? 1));
