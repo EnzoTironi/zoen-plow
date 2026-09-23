@@ -123,12 +123,23 @@ COPY prompt/AGENTS.md /opt/plow/prompt/AGENTS.md
 COPY skills/ /opt/plow/skills/
 ```
 
-**Do not carry your own usage reporter.** This image owns that: it registers
+A variant that has work of its own — a worker, a scheduler, a digest — ships
+one executable at `/opt/plow/variant/start`, which boot runs beside the
+gateway:
+
+```dockerfile
+COPY --chmod=0755 start /opt/plow/variant/start
+```
+
+It is started, not supervised: it owns its own restarts, and its failure is
+logged rather than fatal, because the agent answering its owner does not depend
+on it.
+
+**Do not carry your own usage reporter, boot or entrypoint.** This image owns those: it registers
 the listing, reads OpenClaw's transcripts and reports every five minutes, and
 it is the one copy we fix when OpenClaw changes where it keeps them. A variant
-that ships its own reporter — or its own `boot/`, entrypoint or `CMD` — is on
-its own the next time that happens, which has already cost builders a week of
-zeros on the board.
+that forks them is on its own the next time that happens, which has already
+cost builders a week of zeros on the board.
 
 ## Publishing
 

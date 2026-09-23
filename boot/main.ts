@@ -5,6 +5,7 @@ import { renderConfig } from "./config.js";
 import { identityFromApi } from "./identity.js";
 import { renderPrompt } from "./prompt.js";
 import { startGateway } from "./process.js";
+import { startVariant } from "./variant.js";
 
 try {
   const base = process.env.PLOW_API_BASE?.replace(/\/$/, "");
@@ -23,6 +24,7 @@ try {
   await writeFile("/var/lib/plow/openclaw.json", JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
   console.log(`plow-boot: identity resolved to ${identity.line.uid}`);
   startAgentIndex();
+  startVariant();
   await startGateway(false, identity.mcp_url ?? undefined);
 } catch (error) {
   console.error(`plow-boot: parked: ${error instanceof Error ? error.message : String(error)}`);
