@@ -51,7 +51,7 @@ export function startAgentIndex(interval = 300_000) {
       // inherited, and a client that finds nothing at its GUESSED default
       // reports a day of zeros without calling it a failure -- silence being
       // the correct answer for a machine that simply does not run OpenClaw.
-      env: { PATH: process.env.PATH!, HOME: "/var/lib/plow", OPENCLAW_STATE_DIR: "/var/lib/plow", AGENT_ID: agent, PLOW_API_BASE: process.env.PLOW_API_BASE!, ...(token ? { PLOW_AGENT_TOKEN: token } : {}) },
+      env: { PATH: process.env.PATH!, HOME: "/var/lib/plow", OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR!, AGENT_ID: agent, PLOW_API_BASE: process.env.PLOW_API_BASE!, ...(token ? { PLOW_AGENT_TOKEN: token } : {}) },
     });
     child.on("error", error => { console.error(`agent-index: ${error.message}`); resolve(1); });
     child.on("close", code => resolve(code ?? 1));
