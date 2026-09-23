@@ -15,16 +15,21 @@ plow-agents login
 plow-agents lines
 ```
 
-This image is published, and an agent built on it is a `FROM` line plus the
-agent's own content — see [Building a variant image](#building-a-variant-image).
-To run the base itself on Plow's cloud host:
+This image is published as
+`public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha>`, one immutable tag per
+commit of this repository, so an agent built on it is a `FROM` line plus its
+own content — see [Building a variant image](#building-a-variant-image). Build
+and push your variant to a registry you control, make it publicly pullable by
+Plow, and deploy it:
 
 ```sh
-plow-agents deploy public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<sha> --line LINE_UID
+plow-agents image build REGISTRY/REPOSITORY:TAG
+plow-agents image push REGISTRY/REPOSITORY:TAG
+plow-agents deploy REGISTRY/REPOSITORY@sha256:DIGEST --line LINE_UID
 ```
 
-`<sha>` is a commit of this repository; `plow-agents image show <slug>` prints
-the reference a published agent runs.
+Use the full digest reference printed by push and the selected line ID. To try
+the base by itself, deploy its published tag instead.
 
 To build and run locally, clone this repository and run these commands from its
 root. By default, mint writes `plow-credentials` in the current directory;
@@ -123,6 +128,16 @@ it is the one copy we fix when OpenClaw changes where it keeps them. A variant
 that ships its own reporter — or its own `boot/`, entrypoint or `CMD` — is on
 its own the next time that happens, which has already cost builders a week of
 zeros on the board.
+
+## Publishing
+
+Published by CI in `plow-pbc/plow`
+(`.github/workflows/build-agent-image.yml`), one immutable tag per commit:
+`public.ecr.aws/e1h7x4a2/plow-cloud-agents:base-<full commit sha>`. There is no
+`latest`, and the tag names the commit that built it — this repository's for
+the base image, the variant's own for a variant, since one registry repository
+holds both. The tags that exist are readable from the registry itself:
+<https://gallery.ecr.aws/e1h7x4a2/plow-cloud-agents>.
 
 ## Trust
 
