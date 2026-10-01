@@ -11,7 +11,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
     registerTool(factory: (context: object) => { name: string }) { names.push(factory({}).name); },
     on(name: string) { hooks.push(name); },
   });
-  assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to"]);
+  assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"]);
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
   assert.deepEqual(manifest.contracts.tools, names);
   assert.ok(!hooks.includes("before_tool_call"));
@@ -51,10 +51,10 @@ test("native sends without an active conversation are rejected", async t => {
   entry.register({ registrationMode: "full", runtime: {}, registerTool() {}, logger: { info() {} }, on() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; } });
   const fetch = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not request"); });
-  for (const accountId of ["chat", "email"]) await assert.rejects(channel!.outbound.sendText({
+  for (const [accountId, refusal] of [["chat", /current conversation/], ["email", /plow_send_email/]] as const) await assert.rejects(channel!.outbound.sendText({
     cfg: { channels: { plow: { apiBase: "http://fixture", lineUid: "chat", emailLineUid: "email" } } },
     accountId, to: "target", text: "Friday at noon.",
-  }), /current conversation/);
+  }), refusal);
   assert.equal(fetch.mock.callCount(), 0);
 });
 
