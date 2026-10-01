@@ -36,16 +36,33 @@ its release commit `eb377ac59e6c9fd6c7705028034812becf00271b`.
 
 ## Defaults we inherit
 
-Generated config leaves host agent concurrency and cross-provider messaging
-policy unset, so both follow the pinned OpenClaw release's defaults. Review
-those defaults when changing the runtime pin or adding channels. Host concurrency
-is separate from Plow's per-chat scheduling; Plow's send adapter still validates
-that destinations are active and belong to its served lines.
+Plow prepares messages in arrival order within each chat, releasing the chat lane
+at the dispatch call rather than model completion, and sets the global queue mode
+to `collect`. OpenClaw's [Telegram middleware](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/bot-core.ts#L257)
+also orders ordinary messages using [conversation keys](https://github.com/openclaw/openclaw/blob/eb377ac59e6c9fd6c7705028034812becf00271b/extensions/telegram/src/sequential-key.ts#L250).
+Host concurrency and queue tuning inherit the pinned defaults:
+500 ms debounce, cap 20 pending messages, and summarize overflow. Retained prompts
+are joined without a Plow text cap; overflow keeps bounded 160-character previews,
+so text beyond 20 pending messages can be summarized or omitted. At 1.5-second
+spacing, a busy run lasting roughly 32 seconds can reach that limit.
 
-On 2026.9.6, OpenClaw loads channel receipt and tool execution in separate plugin
-module instances. Plow shares the active turn by session key so `plow_start_thread`
-can use its owner context. Tool Search is disabled to retain the tested plugin and
-MCP tool surface.
+Every Plow tool uses the SDK's per-run requester, account and owner fields, resolving
+the conversation from its native ID or retained delivery route on collected follow-ups,
+then fetches current Plow chat facts. No shared receipt registry or
+async execution context is needed. Thread creation keys use the host tool-call ID.
+Native message sends use OpenClaw's cross-context policy with both within-provider
+and across-provider permissions false; the Plow send adapter checks served lines
+and active destinations. Tool Search remains disabled.
+
+External plugins cannot use OpenClaw's trusted durable ingress. Plow retains UID
+deduplication and atomic per-chat checkpoints with a 512-UID recent set. Catch-up
+reads only the newest 50 messages per chat, stopping at the checkpoint; four chats
+can recover concurrently. Truncation warnings report the fetched count and an
+unknown older unread count because the API provides no total. Automatic phone
+finals use the SDK inbound dispatcher’s durable outbound queue. Adoption callbacks acknowledge sources, not successful replies;
+deferred sources remain pending until the host adopts them. Terminal commands
+without model runs acknowledge at completion. Uncertain delivery is not blindly
+replayed, but later explicit model sends are allowed. There is no run-wide latch.
 
 A state database already opened by 2026.9.6 cannot be opened by 2026.9.4.
 Restore a pre-upgrade backup, or use a fresh state volume (which resets local
@@ -54,4 +71,4 @@ Before replacing a volume, stop the agent and preserve `/var/lib/plow/plow-check
 and `/var/lib/plow/plow-email` (where email threads report).
 Restore those directories into the replacement volume before booting the agent.
 Without checkpoints, boot silently skips group messages from the outage window;
-trailing unanswered owner DMs replay in order.
+trailing unanswered owner DMs dispatch in history order.

@@ -103,7 +103,7 @@ skills, and other owner settings survive restarts. Plow seeds defaults on a fres
 volume, then refreshes its own settings through `$include` files under
 `/etc/plow/openclaw` at every boot. The Plow gateway, provider, MCP server (when
 connected), channel, plugin entry and load path, tools, commands, main agent
-identity, owner DM binding, session routing, `messages.visibleReplies`, and
+identity, owner DM binding, session routing, `messages.visibleReplies`, `messages.queue`, and
 cross-conversation memory policy are Plow-owned. OpenClaw refuses edits to
 those included settings; edits made by hand beside an include are removed at
 the next boot. Additional bindings survive.
@@ -127,8 +127,9 @@ Without a cached owner, the fallback lookup refuses truncated listings.
 The API currently returns complete listings.
 Socket drops reconnect with backoff; the plugin never re-reads identity.
 
-Without a checkpoint, the earliest unanswered owner-DM message is first contact,
-including texts sent before the plugin connects. Later unanswered texts run in order.
+Without a checkpoint, the earliest unanswered owner-DM message in the newest 50 is first contact,
+including texts sent before the plugin connects. Later unanswered texts are dispatched
+in history order; OpenClaw controls runs and collects pending messages.
 Chat checkpoints survive restarts. Chats omitted from a truncated listing
 recover on their first live frame. Optional history failures still dispatch the
 current message. Email threads have separate sessions, shared by their senders,
@@ -136,10 +137,20 @@ but no history backfill. The owner's phone DM uses the main session; other DMs
 and groups have separate sessions. A non-owner member's sender ID is their
 normalized messaging handle, stable across chats. The owner uses `plow-owner`.
 
-Shutdown-interrupted chat turns can recover. Incomplete live turns are logged
-and acknowledged. OpenClaw handles no-reply fallback delivery. An ambiguous
-delivery is not retried; a crash after sending but before checkpointing can
-duplicate a reply.
+Source UIDs are checkpointed atomically when OpenClaw adopts them, including
+collected follow-ups. Native commands without a model run checkpoint at completion.
+Sources interrupted before adoption can recover; adoption is not proof of a
+successful reply. Reconnect reads one page of at most 50 messages per chat, stopping
+at its checkpoint, with at most four chats recovering concurrently. If the checkpoint
+is absent and older history exists, a warning reports the fetched count and that
+the older unread count is unknown; the API does not expose that count. Recent UIDs
+prevent replay of adopted sources. Phone finals use OpenClaw’s durable outbound
+queue, retaining delivery ownership while provider confirmation is pending.
+OpenClaw handles no-reply fallback delivery.
+An uncertain send is not automatically retried and does not block later tool
+calls in the run. Ordinary message sends have no API idempotency key, so a new
+model-issued send can duplicate an uncertain delivery. Plow requests time out
+after 40 seconds, above the API’s 30-second LinQ send timeout.
 
 Replies stay in their source conversation. The agent can start groups only from
 an active owner message in the main Plow DM and send follow-ups to active
