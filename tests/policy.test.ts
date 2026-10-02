@@ -27,7 +27,7 @@ for (const mode of ["full", "discovery", "tool-discovery"]) test(`${mode} expose
   });
   assert.deepEqual(names, ["plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email"]);
   const manifest = JSON.parse(await readFile(new URL("../plugin/openclaw.plugin.json", import.meta.url), "utf8"));
-  assert.deepEqual(manifest.contracts.tools, names);
+  assert.deepEqual(manifest.contracts.tools, [...names, "plow_hours"], "the manifest also declares the opt-in hours capability");
   assert.ok(!hooks.includes("before_tool_call"));
 });
 

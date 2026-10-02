@@ -12,6 +12,7 @@
     "plugin"
   ],
   "dependencies": {
-    "json5": "^2.2.3"
+    "json5": "^2.2.3",
+    "zod": "4.6.5"
   }
 }

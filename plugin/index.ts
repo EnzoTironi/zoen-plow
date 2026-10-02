@@ -10,16 +10,14 @@ import { hasVisibleChannelTurnDispatch } from "openclaw/plugin-sdk/channel-messa
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { request, listen, accepts, findOwnerChat, ownerChat, invalidateContextualizedHistory, HttpError, DeliveryUnknownError, type Account, type Chat, type Message, type Page, type TurnOutcome, type TurnIngress } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
+import { normalizeHandle } from "./hours.ts";
+import { clockHours, registerHours } from "./hours-channel.ts";
+import { registerHoursWeb } from "./hours-web.ts";
 
 let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
-
-function normalizedHandle(handle: string): string {
-  const compact = handle.trim().replace(/[\s().-]/g, "");
-  return /^\+\d{10,15}$/.test(compact) ? compact : handle.trim().toLowerCase();
-}
 
 type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner">;
 function conversationUid(context: Requester): string | undefined {
@@ -107,11 +105,17 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
 async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, message: Message, firstContact: boolean, history: Message[], ingress: TurnIngress, log: (text: string) => void): Promise<TurnOutcome> {
   const sender = message.sender;
   const senderIsOwner = sender.type === "member" && chat.participants.some(p => p.type === "member" && p.uid === sender.uid && p.role === "owner");
-  const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizedHandle(sender.provider_key) : sender.line.uid;
+  const senderId = sender.type === "member" ? senderIsOwner ? "plow-owner" : normalizeHandle(sender.provider_key) : sender.line.uid;
   const senderName = (sender.type === "member" ? sender.display_name : sender.line.display_name) ?? senderId;
   const kind = account.accountId === "email" || chat.participants.length === 2 ? "direct" : "group";
   const peer = { kind, id: account.accountId === "email" || kind === "group" || (sender.type === "member" && !senderIsOwner) ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
+  const confirmation = clockHours({ account, chat, message, senderIsOwner });
+  if (confirmation !== undefined) {
+    ingress.onSubmitted();
+    await durableSend(cfg, route, account.accountId, chat.uid, chat.uid, confirmation, kind);
+    return "completed";
+  }
   const media = [];
   if (account.accountId === "chat") {
     for (const attachment of message.attachments) {
@@ -285,9 +289,17 @@ export default defineChannelPluginEntry({
   id: "plow", name: "Plow", description: "Plow channel", plugin,
   setRuntime: value => { runtime = value; },
   registerFull(api) {
-    if (api.registrationMode === "full") api.logger.info("plow channel registered");
+    if (api.registrationMode === "full") {
+      registerHoursWeb(api);
+      api.logger.info("plow channel registered");
+    }
   },
   registerCapabilities(api) {
+    registerHours(api, async context => {
+      if (!context.config) throw new Error("Plow configuration is unavailable.");
+      const account = plugin.config.resolveAccount(context.config, "chat");
+      return { account, ...await ownerDmTurn(account, context) };
+    });
     api.registerTool(context => ({
       name: "plow_start_thread", label: "Start a Plow group thread",
       description: "From the owner's main Plow DM, start a group text with the owner and the supplied phone numbers. The configured group trust mode controls trusted; ask mode requires an explicit owner choice. Sends the first message and returns the chat uid; use plow_reply_to with that uid for follow-ups. Accepts phone numbers, not chat ids or email addresses.",

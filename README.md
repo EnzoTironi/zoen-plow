@@ -69,6 +69,10 @@ with a shell on the VM already has full control of the agent.
 This proxy is for local development only: anyone who can reach localhost:3001
 can act as an admin of this agent. It rejects browser requests with a foreign
 `Origin`; local clients can supply an allowed `Origin`.
+Its Caddy configuration attributes every local client to the development owner
+at the documentation address `192.0.2.1`. The pinned gateway rejects HTTP auth
+when every forwarded hop is trusted loopback. The cloud proxy uses the actual
+client address.
 
 For a local Plow API, use the CLI's `--api-base` option and mint with
 `--agent-api-base` set to an address the container can reach, such as
@@ -252,3 +256,8 @@ group or peer sessions. Shared files and tools are not privacy boundaries.
 ## Development
 
 See [development checks and pinned source contracts](docs/development.md).
+
+An opt-in [contractor hours variant](examples/contractor-hours/README.md) records
+registered contractors' clock messages, assigned demands and audited corrections,
+with an authenticated timesheet at `/hours` and optional Sheets and wiki projection
+through Latch.

@@ -22,3 +22,5 @@ jobs:
             '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test /opt/plow/tests/*.test.ts'
       - name: Offline gateway probe
         run: docker run --rm --network none plow-openclaw:test /opt/plow/probe
+      - name: Contractor timesheet gateway probe
+        run: docker run --rm --network none -e PLOW_HOURS=1 plow-openclaw:test /opt/plow/probe

@@ -16,7 +16,13 @@ docker run --rm --user root --network none \
   -v "$PWD/tests:/opt/plow/tests:ro" plow-openclaw:test sh -c \
   '/opt/plow/node_modules/.bin/tsc --noEmit -p /opt/plow/tsconfig.json && mkdir -p /opt/plow/plugin/node_modules && ln -s /app /opt/plow/plugin/node_modules/openclaw && node --test /opt/plow/tests/*.test.ts'
 docker run --rm --network none plow-openclaw:test /opt/plow/probe
+docker run --rm --network none -e PLOW_HOURS=1 plow-openclaw:test /opt/plow/probe
 ```
+
+The opt-in probe checks anonymous rejection and authenticated page, data, assets
+and write rejection for `/hours` in the pinned gateway. Clock and ledger tests use
+fictional contractors and local transport fixtures; they do not require Google
+or a connected Mac.
 
 ## Pinned OpenClaw contracts
 

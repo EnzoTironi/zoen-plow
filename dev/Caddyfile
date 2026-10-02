@@ -17,5 +17,8 @@
 	reverse_proxy 127.0.0.1:3000 {
 		header_up Host 127.0.0.1:3000
 		header_up X-Plow-User dev-owner
+		# All local clients are this dev owner. HTTP auth needs an attributed
+		# client outside the trusted loopback proxy; use a documentation address.
+		header_up X-Forwarded-For 192.0.2.1
 	}
 }
