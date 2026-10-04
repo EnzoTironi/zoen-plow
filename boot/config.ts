@@ -42,6 +42,7 @@ export function renderConfig(identity: Identity, apiBase: string, threadTrust = 
     } } },
     agents: { entries: { main: { identity: { name } } }, defaults: {
       workspace: "/var/lib/plow/workspace", skipBootstrap: true,
+      silentReply: { group: "allow" },
       model: { primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"] }, sandbox: { mode: "off" },
     } },
     mcp: { sessionIdleTtlMs: 300_000, ...(identity.mcp_url ? { servers: { plow: {
