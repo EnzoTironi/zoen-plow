@@ -1,0 +1,3 @@
+# The dated narrative links these generated experiment ledgers for individual review.
+docs/validation/*.jsonl linguist-generated=true
+tests/fixtures/documents/*.pdf binary

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createRequire } from "node:module";
 import { nativeSendPolicy } from "./native-message-policy.ts";
 import entry, { acknowledgePluginHandoff } from "../plugin/index.ts";
-import { MAX_IMAGE_BYTES } from "../plugin/media.ts";
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 import { checkpointUid, websocketFixture } from "./ws-fixture.ts";
 
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
@@ -33,10 +33,10 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     if (url.endsWith("/input.png")) {
       if (outcome === "fetch-size-message") throw new Error("image exceeds 8 MiB");
       const streamed = ["streamed-oversized-image", "understated-oversized-image"].includes(outcome);
-      const response = new Response(streamed ? new Uint8Array(MAX_IMAGE_BYTES + 1) : "invalid image", {
+      const response = new Response(streamed ? new Uint8Array(MAX_ATTACHMENT_BYTES + 1) : "invalid image", {
         status: outcome === "missing-image" ? 404 : 200,
         headers: outcome === "understated-oversized-image" ? { "content-length": "13" }
-          : ["missing-image", "oversized-image"].includes(outcome) ? { "content-length": String(MAX_IMAGE_BYTES + 1) } : {},
+          : ["missing-image", "oversized-image"].includes(outcome) ? { "content-length": String(MAX_ATTACHMENT_BYTES + 1) } : {},
       });
       const reader = response.body!.getReader();
       const read = reader.read.bind(reader), cancel = reader.cancel.bind(reader);
@@ -152,14 +152,14 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   if (imageCase) {
     assert.ok(context.message.rawBody.startsWith("hello\n"));
     if (outcome === "oversized-image") {
-      assert.match(context.message.rawBody, /server reported a size above 8 MiB/);
+      assert.match(context.message.rawBody, /server reported a size above the configured 50 MiB attachment budget/);
       assert.match(context.message.rawBody, /actual size is unverified/);
       assert.doesNotMatch(context.message.rawBody, /This image exceeds|download exceeded/);
       assert.equal(imageReads, 0);
       assert.equal(imageCancellations, 1);
       assert.equal(savedImages, 0);
     } else if (["streamed-oversized-image", "understated-oversized-image"].includes(outcome)) {
-      assert.match(context.message.rawBody, /image download exceeded 8 MiB and was stopped/);
+      assert.match(context.message.rawBody, /attachment download exceeded the configured 50 MiB budget and was stopped/);
       assert.doesNotMatch(context.message.rawBody, /server reported/);
       assert.equal(imageReads, 1);
       assert.equal(imageCancellations, 1);

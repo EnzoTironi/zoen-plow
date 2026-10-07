@@ -190,12 +190,34 @@ test("guest tools default to empty and are declared once for channel and messagi
 });
 
 test("native messaging retains local workspace and memory file tools", () => {
-  const { tools } = renderConfig(identity, "http://api:8000");
+  const config = renderConfig(identity, "http://api:8000"), { tools } = config;
   for (const name of ["read", "write", "edit", "exec", "automations", "sessions_spawn", "subagents"]) assert.ok(tools.alsoAllow.includes(name));
   assert.deepEqual(tools.message.crossContext, { allowWithinProvider: false, allowAcrossProviders: false });
   assert.equal(tools.profile, "messaging"); assert.equal(tools.toolSearch, false);
-  assert.deepEqual(tools.media.image, { enabled: true, maxBytes: 8 * 1024 * 1024, timeoutSeconds: 45 });
+  assert.deepEqual(tools.media.image, { enabled: true, maxBytes: 50 * 1024 * 1024, timeoutSeconds: 45, attachments: { mode: "all", maxAttachments: 16 } });
+  assert.ok(tools.alsoAllow.includes("pdf"));
+  assert.equal(config.agents.defaults.pdfMaxMb, 50);
+  assert.equal(config.agents.defaults.pdfMaxPages, 20);
   assert.equal(tools.media.audio.enabled, false); assert.equal(tools.media.video.enabled, false);
+});
+
+test("PDF upgrade seeds missing budgets and preserves explicit model, page and size choices", async t => {
+  const fixture = await configFixture(t);
+  const defaults = { pdfModel: { primary: "owner/vision" }, pdfMaxMb: 75, pdfMaxPages: 30 };
+  await writeFile(fixture.path, JSON.stringify({ agents: { defaults } }));
+  await syncConfig(renderConfig(identity, "http://fixture"), fixture.path, fixture.includes);
+  const config = JSON5.parse(await readFile(fixture.path, "utf8"));
+  for (const [key, value] of Object.entries(defaults)) assert.deepEqual(config.agents.defaults[key], value);
+});
+
+test("PDF upgrade does not shadow budgets inside an opaque owner defaults include", async t => {
+  const fixture = await configFixture(t);
+  await writeFile(fixture.path, JSON.stringify({ agents: { defaults: { $include: "/owner-defaults.json5" } } }));
+  await syncConfig(renderConfig(identity, "http://fixture"), fixture.path, fixture.includes);
+  const defaults = JSON5.parse(await readFile(fixture.path, "utf8")).agents.defaults;
+  assert.equal(defaults.$include, "/owner-defaults.json5");
+  assert.equal(defaults.pdfMaxMb, undefined);
+  assert.equal(defaults.pdfMaxPages, undefined);
 });
 
 test("private transcript recall is disabled across isolated conversations", () => {

@@ -14,7 +14,8 @@ export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { installExperienceTools, notificationPaused } from "./experience.ts";
 import { experienceContext, readExperience, updateExperience, quietNow } from "./experience-state.ts";
-import { inboundImage, IMAGE_TYPES, ImageLimitError } from "./media.ts";
+import { inboundAttachment, attachmentMaxBytes, ATTACHMENT_TYPES, AttachmentLimitError } from "./media.ts";
+import { pdfPreview } from "./documents.ts";
 import { installPersonalityPage } from "./personality-page.ts";
 
 let runtime: PluginRuntime;
@@ -139,24 +140,51 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
   const mediaIssues: string[] = [];
-  if (account.accountId === "chat") {
+  const documentPreviews = [];
+  const maxBytes = attachmentMaxBytes();
+  {
     for (const attachment of message.attachments.slice(0, 4)) {
-      if (!IMAGE_TYPES.has(attachment.content_type)) { mediaIssues.push("This attachment type is unsupported. Ask for relevant text or a PNG/JPEG/GIF/WebP still image."); continue; }
+      const contentType = attachment.content_type.split(";", 1)[0].trim().toLowerCase();
+      if (!ATTACHMENT_TYPES.has(contentType)) { mediaIssues.push("This attachment type is unsupported. Ask for relevant text, a PDF, or a PNG/JPEG/GIF/WebP still image."); continue; }
       try {
-        const buffer = await inboundImage(new URL(attachment.url, account.apiBase), attachment.content_type);
-        const saved = await runtime.channel.media.saveMediaBuffer(buffer, attachment.content_type, "inbound", undefined, attachment.filename);
-        media.push({ path: saved.path, contentType: attachment.content_type, fileName: attachment.filename });
+        const buffer = await inboundAttachment(new URL(attachment.url, account.apiBase), contentType, maxBytes, ingress.abortSignal);
+        const saved = await runtime.channel.media.saveMediaBuffer(buffer, contentType, "inbound", maxBytes, attachment.filename);
+        if (contentType === "application/pdf") {
+          // Keep the original reference as data. Putting it in media would trigger
+          // a second native extraction with different automatic-preview budgets.
+          try {
+            const preview = await pdfPreview(buffer, cfg, ingress.abortSignal);
+            const document = { status: "previewed", fileName: attachment.filename, path: saved.path, text: preview.text, textTruncated: preview.textTruncated, previewPageLimit: preview.previewPageLimit, imageExtractionFailed: preview.imageExtractionFailed, imageStorageFailed: false, imagesAvailable: 0 };
+            documentPreviews.push(document);
+            if (preview.imageExtractionFailed) mediaIssues.push("Some PDF page images could not be rendered. Only the returned text and images were read; do not claim all preview pages were inspected.");
+            for (const [index, image] of preview.images.entries()) {
+              try {
+                const page = await runtime.channel.media.saveMediaBuffer(Buffer.from(image.data, "base64"), image.mimeType, "inbound", maxBytes, `pdf-preview-${index + 1}.png`);
+                media.push({ path: page.path, contentType: image.mimeType, fileName: `PDF preview image ${index + 1}` });
+                document.imagesAvailable++;
+              } catch { document.imageStorageFailed = true; }
+            }
+            if (document.imageStorageFailed) {
+              document.status = "partial";
+              mediaIssues.push("Some rendered PDF page images could not be stored. The extracted text and any successfully stored images remain available. Do not claim the missing images were read.");
+            }
+          } catch {
+            documentPreviews.push({ status: "unreadable", fileName: attachment.filename, path: saved.path });
+            mediaIssues.push("A PDF preview could not be extracted. The cause is unverified. The saved PDF is available to the pdf tool in authorized conversations; it supports pages and password parameters. If reading still fails, ask for relevant text or a readable copy. Do not guess contents or assume encryption.");
+          }
+        } else media.push({ path: saved.path, contentType, fileName: attachment.filename });
       } catch (error) {
-        mediaIssues.push(error instanceof ImageLimitError
+        const budget = `${maxBytes / (1024 * 1024)} MiB`;
+        mediaIssues.push(error instanceof AttachmentLimitError
           ? error.reason === "declared"
-            ? "The server reported a size above 8 MiB, so this image download was skipped. Its actual size is unverified. Ask for a smaller image or relevant text; do not guess its contents or claim a measured file size."
-            : "The image download exceeded 8 MiB and was stopped. Ask for a smaller image or relevant text; do not guess its contents."
-          : "An image could not be downloaded or processed. The cause is unverified. Ask for relevant text or a supported still image; do not guess its contents or failure cause.");
+            ? `The server reported a size above the configured ${budget} attachment budget, so this download was skipped. Its actual size is unverified. Ask for a smaller file or relevant text; do not guess contents or claim a measured file size.`
+            : `The attachment download exceeded the configured ${budget} budget and was stopped. Ask for a smaller file or relevant text; do not guess contents.`
+          : "An attachment could not be downloaded or processed. The cause is unverified. Ask for relevant text or a readable file; do not guess its contents or failure cause.");
       }
     }
-    if (message.attachments.length > 4) mediaIssues.push("Only the first four images can be inspected in one message.");
+    if (message.attachments.length > 4) mediaIssues.push("Only the first four attachments are processed in one message. Ask to send the remaining files in another message.");
   }
-  const body = [message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]"), ...mediaIssues].join("\n");
+  const body = [message.body || "[Attachment]", ...mediaIssues].join("\n");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const email = account.accountId === "email";
   const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
@@ -193,7 +221,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
-        payload: { first_contact: firstContact, trusted: chat.trusted, participants, emailCapabilities, ...experience, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
+        payload: { first_contact: firstContact, trusted: chat.trusted, participants, emailCapabilities, ...experience, ...(documentPreviews.length ? { documentPreviews } : {}), ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
       ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),
     },
     media,

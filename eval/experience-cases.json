@@ -571,11 +571,11 @@
     "maxChars": 400
   },
   {
-    "id": "experience-unsupported-email-attachment",
+    "id": "experience-unreadable-email-attachment",
     "category": "media",
     "facts": {
       "first_contact": false,
-      "attachment_status": "Email attachments unsupported in this base; no attachment content"
+      "attachment_status": "The incoming PDF download failed; no attachment content or preview is available"
     },
     "messages": [
       {

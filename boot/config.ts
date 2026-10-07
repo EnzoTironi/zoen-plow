@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import JSON5 from "json5";
 import { agentDefinitionSchema, type AgentDefinition } from "./extensions.ts";
+import { attachmentMaxBytes } from "./media.ts";
 
 export type Participant =
   | { type: "member"; uid: string; role: string }
@@ -57,6 +58,7 @@ export function renderConfig(identity: Identity, apiBase: string, definition: Ag
       timeoutSeconds: 600,
       silentReply: { group: "allow" },
       imageModel: { primary: "plow/anthropic/claude-sonnet-5" },
+      pdfMaxMb: attachmentMaxBytes() / (1024 * 1024), pdfMaxPages: 20,
       subagents: { maxConcurrent: 2, maxSpawnDepth: 1, maxChildrenPerAgent: 2 },
       model: { primary: "plow/z-ai/glm-5.2", fallbacks: ["plow/anthropic/claude-sonnet-5"] }, sandbox: { mode: "off" },
       // Model params must not become a legacy model-selection allowlist.
@@ -89,7 +91,7 @@ export function renderConfig(identity: Identity, apiBase: string, definition: Ag
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills", ...definition.skills] }, allowBundled: ["plow-no-bundled-skills"], workshop: { autonomous: { mode: "off" } } },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { media: { image: { enabled: true, maxBytes: 8 * 1024 * 1024, timeoutSeconds: 45 }, audio: { enabled: false }, video: { enabled: false } }, message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "sessions_spawn", "subagents", "web_search", "web_fetch", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", "plow_preferences", "plow_personality", "plow_memory", "plow_room", "plow_tasks", "plow_notifications", ...guestTools, ...extensions.flatMap(value => value.tools)], deny: ["ask_user"] },
+    tools: { media: { image: { enabled: true, maxBytes: attachmentMaxBytes(), timeoutSeconds: 45, attachments: { mode: "all", maxAttachments: 16 } }, audio: { enabled: false }, video: { enabled: false } }, message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "pdf", "sessions_spawn", "subagents", "web_search", "web_fetch", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", "plow_preferences", "plow_personality", "plow_memory", "plow_room", "plow_tasks", "plow_notifications", ...guestTools, ...extensions.flatMap(value => value.tools)], deny: ["ask_user"] },
   };
 }
 
@@ -215,6 +217,10 @@ export async function syncConfig(
     if (silence === undefined) defaults.silentReply = rendered.agents.defaults.silentReply;
     else if (isObject(silence) && silence.group === undefined) silence.group = "allow";
     if (defaults.imageModel === undefined) defaults.imageModel = rendered.agents.defaults.imageModel;
+    if (defaults.$include === undefined) {
+      if (defaults.pdfMaxMb === undefined) defaults.pdfMaxMb = rendered.agents.defaults.pdfMaxMb;
+      if (defaults.pdfMaxPages === undefined) defaults.pdfMaxPages = rendered.agents.defaults.pdfMaxPages;
+    }
   }
   const heartbeat = defaults?.heartbeat;
   if (defaults && (heartbeat === undefined || (isObject(heartbeat) && (heartbeat.target ?? "owner") === "owner"))) {

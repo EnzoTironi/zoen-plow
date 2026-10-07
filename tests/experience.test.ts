@@ -13,7 +13,7 @@ import { composePrompt, renderPrompt } from "../boot/prompt.ts";
 import { renderConfig, syncConfig } from "../boot/config.ts";
 import { healthy } from "../boot/health.ts";
 import { personalityAxes, personalitySchema, personalityPatchSchema } from "../boot/personality.ts";
-import { inboundImage, MAX_IMAGE_BYTES } from "../plugin/media.ts";
+import { inboundAttachment } from "../plugin/media.ts";
 import { scheduler } from "../plugin/scheduler.ts";
 
 const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "ln_fixture", guestTools: ["plow_memory", "plow_tasks"] };
@@ -502,9 +502,9 @@ test("readiness and bounded media reject false health, errors and oversized bodi
   t.mock.method(globalThis, "fetch", async () => Response.json({ ready: false })); assert.equal(await healthy(), false);
   t.mock.method(globalThis, "fetch", async () => Response.json({ ready: true })); assert.equal(await healthy(), true);
   t.mock.method(globalThis, "fetch", async () => new Response("failure", { status: 503 })); assert.equal(await healthy(), false);
-  t.mock.method(globalThis, "fetch", async () => new Response(new Uint8Array(MAX_IMAGE_BYTES + 1)));
-  await assert.rejects(inboundImage(new URL("http://fixture/image"), "image/png"), /exceeds/);
-  await assert.rejects(inboundImage(new URL("http://fixture/image"), "application/pdf"), /unsupported/);
+  t.mock.method(globalThis, "fetch", async () => new Response(new Uint8Array(1025)));
+  await assert.rejects(inboundAttachment(new URL("http://fixture/image"), "image/png", 1024), /exceeds/);
+  await assert.rejects(inboundAttachment(new URL("http://fixture/image"), "audio/mp3", 1024), /unsupported/);
 });
 
 test("native task flows persist commitments across runtime recreation, isolate rooms and record terminal evidence", async t => {
