@@ -65,7 +65,9 @@ export function renderConfig(identity: Identity, apiBase: string, definition: Ag
         { enabled: true, hooks: { allowConversationAccess: value.conversationAccess } }])) } },
     messages: { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
-      apiBase, lineUid: identity.line.uid, threadTrust, guestTools,
+      apiBase, lineUid: identity.line.uid, threadTrust, guestTools, groupMode: definition.defaults.groupMode,
+      ...(identity.agent?.web_url ? { dashboardUrl: identity.agent.web_url } : {}),
+      ...(definition.persona?.sliders ? { personalityDefaults: definition.persona.sliders } : {}),
       ...(identity.mailbox ? { emailLineUid: identity.mailbox.uid, emailName: identity.mailbox.display_name } : {}),
     } },
     session: { dmScope: "per-account-channel-peer", groupScope: "per-group" },
@@ -75,7 +77,7 @@ export function renderConfig(identity: Identity, apiBase: string, definition: Ag
     // An empty allowlist means unrestricted in OpenClaw.
     skills: { load: { extraDirs: ["/opt/plow/skills", ...definition.skills] }, allowBundled: ["plow-no-bundled-skills"] },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
-    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", ...guestTools, ...extensions.flatMap(value => value.tools)], deny: ["ask_user"] },
+    tools: { message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", "plow_preferences", "plow_personality", "plow_memory", "plow_room", ...guestTools, ...extensions.flatMap(value => value.tools)], deny: ["ask_user"] },
   };
 }
 
