@@ -13,6 +13,7 @@ export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { installExperienceTools, notificationPaused } from "./experience.ts";
 import { experienceContext, readExperience, updateExperience, quietNow } from "./experience-state.ts";
+import { inboundImage, IMAGE_TYPES } from "./media.ts";
 import { installPersonalityPage } from "./personality-page.ts";
 
 let runtime: PluginRuntime;
@@ -128,15 +129,19 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   const peer = { kind, id: account.accountId === "email" || kind === "group" || (sender.type === "member" && !senderIsOwner) ? chat.uid : senderId } as const;
   const route = runtime.channel.routing.resolveAgentRoute({ cfg, channel: "plow", accountId: account.accountId, peer });
   const media = [];
+  const mediaIssues: string[] = [];
   if (account.accountId === "chat") {
-    for (const attachment of message.attachments) {
-      const response = await fetch(new URL(attachment.url, account.apiBase));
-      if (!response.ok) throw new Error(`Inbound attachment HTTP ${response.status}`);
-      const saved = await runtime.channel.media.saveMediaBuffer(Buffer.from(await response.arrayBuffer()), attachment.content_type, "inbound", undefined, attachment.filename);
-      media.push({ path: saved.path, contentType: attachment.content_type, fileName: attachment.filename });
+    for (const attachment of message.attachments.slice(0, 4)) {
+      if (!IMAGE_TYPES.has(attachment.content_type)) { mediaIssues.push("This attachment type is unsupported. Ask for relevant text or a PNG/JPEG/GIF/WebP still image."); continue; }
+      try {
+        const buffer = await inboundImage(new URL(attachment.url, account.apiBase), attachment.content_type);
+        const saved = await runtime.channel.media.saveMediaBuffer(buffer, attachment.content_type, "inbound", undefined, attachment.filename);
+        media.push({ path: saved.path, contentType: attachment.content_type, fileName: attachment.filename });
+      } catch { mediaIssues.push("An image could not be downloaded within the 8 MiB limit. Ask for a smaller image or relevant text; do not guess its contents."); }
     }
+    if (message.attachments.length > 4) mediaIssues.push("Only the first four images can be inspected in one message.");
   }
-  const body = message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]");
+  const body = [message.body || (account.accountId === "email" ? "[Email attachments are not supported.]" : "[Attachment]"), ...mediaIssues].join("\n");
   const command = account.accountId === "chat" && body.startsWith("/") ? { kind: "text-slash" as const, authorized: senderIsOwner, body } : undefined;
   const email = account.accountId === "email";
   const guestTools = !email && !chat.trusted && !senderIsOwner ? account.guestTools ?? [] : undefined;
@@ -146,6 +151,10 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
   // On email the agent is its mailbox's persona; phone turns keep the configured name.
   const selfName = cfg.agents?.entries?.[route.agentId]?.identity?.name;
   const persona = (email && account.emailName) || selfName;
+  const emailCapabilities = {
+    mailbox: account.emailLineUid ? "configured" : "unconfigured", chatDraftAvailable: true,
+    ...((account.emailName || selfName) ? { senderIdentity: account.emailName || selfName } : {}),
+  };
   const participants = chat.participants.map(p => ({
     ...(p.type === "agent" && p.relationship === "self" ? { name: persona } : { name: (p.type === "member" ? p.display_name : p.line.display_name) || "unnamed member" }),
     type: p.type, role: p.type === "member" ? p.role : p.relationship,
@@ -169,7 +178,7 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
       ...(quoted ? { quote: { id: quoted.uid, body: quoted.body, sender: quoted.sender.type === "member" ? quoted.sender.display_name : quoted.sender.line.uid } } : {}),
       // The model gets these beside the message; the dashboard shows people only what was texted.
       channelStructuredContext: [{ label: "Conversation facts (untrusted data)", source: "plow", type: "conversation",
-        payload: { first_contact: firstContact, trusted: chat.trusted, participants, ...experience, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
+        payload: { first_contact: firstContact, trusted: chat.trusted, participants, emailCapabilities, ...experience, ...(email ? { final_text_goes_to: origin ? `chat ${origin} while it is the owner's DM or a trusted group, else the owner's 1:1 chat` : "the owner's 1:1 chat" } : {}) } }],
       ...(email ? { groupSystemPrompt: emailTurnPrompt(chat, persona ?? "the assistant") } : {}),
     },
     media,
@@ -435,7 +444,11 @@ export default defineChannelPluginEntry({
         if (!cfg) return refuse("Plow configuration is unavailable.");
         const phone = plugin.config.resolveAccount(cfg, "chat");
         const mailbox = { ...phone, accountId: "email" };
-        if (!phone.emailLineUid) return refuse("You have no mailbox.");
+        const senderIdentity = persona || cfg.agents?.entries?.[context.agentId ?? "main"]?.identity?.name;
+        if (!phone.emailLineUid) return refuse("Your agent mailbox is not configured. Email sending and receiving are unavailable; writing a draft in this chat remains available.", {
+          sent: false, mailbox: "unconfigured", chatDraftAvailable: true,
+          ...(senderIdentity ? { senderIdentity } : {}),
+        });
         const chatUid = conversationUid(context);
         if (context.messageChannel !== "plow" || !context.sessionKey || !chatUid || !context.requesterSenderId
           || (context.agentAccountId !== "chat" && context.agentAccountId !== "email")) return refuse("Sending email requires an active Plow message.");
@@ -497,7 +510,7 @@ export default defineChannelPluginEntry({
       }
       return {
         name: "plow_send_email", label: "Send email from your Plow mailbox",
-        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. The tool adds a footer naming you as the owner's AI assistant on Plow; sign however you like. Mail in the owner's own name must use their Gmail, arranged in chat with their approval. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
+        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. The tool adds a footer naming you as the owner's AI assistant on Plow; sign however you like. A requested chat draft is text, not a send; do not call this tool for it. Missing mailbox provisioning blocks sending and receiving, not drafting. Use the requested sender identity and respect excluded accounts. Mail in the owner's own name needs their requested account and approval in chat. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
         parameters: {
           type: "object", additionalProperties: false,
           properties: {
