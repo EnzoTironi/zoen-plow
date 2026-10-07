@@ -6,13 +6,14 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
-import { installExperienceTools } from "../plugin/experience.ts";
+import { installExperienceTools, notificationControl } from "../plugin/experience.ts";
 import { experienceContext, quietNow, readExperience, scopePath, updateExperience } from "../plugin/experience-state.ts";
 import { agentDefinition, agentDefinitionSchema } from "../boot/extensions.ts";
 import { composePrompt, renderPrompt } from "../boot/prompt.ts";
 import { renderConfig, syncConfig } from "../boot/config.ts";
 import { healthy } from "../boot/health.ts";
 import { personalityAxes, personalitySchema, personalityPatchSchema } from "../boot/personality.ts";
+import { scheduler } from "../plugin/scheduler.ts";
 
 const account = { apiBase: "http://fixture", accountId: "chat", lineUid: "ln_fixture", guestTools: ["plow_memory", "plow_tasks"] };
 const owner = { type: "member", uid: "owner", role: "owner", provider_key: "+15550000001" };
@@ -28,7 +29,8 @@ async function fixture(t: any, runtime: any = {}) {
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
   t.mock.method(globalThis, "fetch", async (url: string) => Response.json(url.includes("cht_home") ? home : room));
   const factories = new Map<string, any>();
-  installExperienceTools({ config: { channels: { plow: account } }, runtime, on() {}, registerTool(factory: any) {
+  const logs: string[] = [];
+  installExperienceTools({ config: { channels: { plow: account } }, runtime, logger: { info(text: string) { logs.push(text); } }, on() {}, registerTool(factory: any) {
     const context = { assertInvocationCurrent() {} };
     factories.set(factory.create(context).name, factory);
   } } as any, () => account);
@@ -38,7 +40,7 @@ async function fixture(t: any, runtime: any = {}) {
       requesterSenderId: privateDm ? "plow-owner" : guest.provider_key, senderIsOwner: privateDm,
       deliveryContext: { channel: "plow", accountId: "chat", to: privateDm ? "cht_home" : "cht_room" }, assertInvocationCurrent() {}, ...overrides });
   }
-  return { root, tool };
+  return { root, tool, logs };
 }
 
 test("personality schemas derive every axis from the registry and reject unknown or invalid values", () => {
@@ -153,12 +155,267 @@ test("atomic scoped writes retain concurrent updates, protect the file and fence
   assert.equal(await readFile(scopePath(scope), "utf8"), "broken");
 });
 
+test("ordinary notification receipts expose the gate; only requested diagnostics expose journal IDs", async t => {
+  const { tool } = await fixture(t);
+  const scope = { account, conversation: "owner" };
+  await updateExperience(scope, () => {}, state => { state.paused = true; state.suspendedJobs = [{ id: "internal-recovery-731", revision: "r1" }]; });
+  t.mock.method(scheduler, "request", async () => { throw new Error("get must not inspect the scheduler"); });
+  const control = tool("plow_notifications", true);
+  const ordinary = await control.execute("get", { action: "get", scope: "all" });
+  assert.equal(ordinary.details.scopeControl.paused, true);
+  assert.equal(ordinary.details.scheduledDeliveryHere, "paused");
+  assert.equal(ordinary.details.schedulerJobs, "not_checked");
+  assert.doesNotMatch(JSON.stringify(ordinary), /internal-recovery-731|suspendedJobs/);
+  const diagnostic = await control.execute("diagnostic", { action: "get", scope: "all", diagnostics: true });
+  assert.deepEqual(diagnostic.details.diagnostics.suspendedJobs, ["internal-recovery-731"]);
+  assert.match(diagnostic.details.diagnostics.meaning, /not current job state/);
+});
+
+test("a partial notification pause reports its persisted gate without leaking scheduler diagnostics", async t => {
+  const { tool, logs } = await fixture(t);
+  t.mock.method(scheduler, "request", async () => { throw new Error("synthetic-private-gateway-error-731"); });
+  const result = await tool("plow_notifications", true).execute("pause", { action: "pause", scope: "all" });
+  assert.equal(result.details.status, "incomplete");
+  assert.equal(result.details.scopeControl.paused, true);
+  assert.equal(result.details.directReplies, "available_during_pause_and_resume");
+  assert.equal(result.details.schedulerJobs, "unconfirmed");
+  assert.doesNotMatch(JSON.stringify(result), /synthetic-private-gateway-error-731/);
+  assert.equal((await readExperience({ account, conversation: "owner" })).paused, true);
+  assert.ok(logs.some(line => line.includes("phase=scheduler_request method=cron.list")));
+  assert.doesNotMatch(JSON.stringify(logs), /synthetic-private-gateway-error-731/);
+  const diagnostic = await tool("plow_notifications", true).execute("diagnostics", { action: "pause", scope: "all", diagnostics: true });
+  assert.deepEqual(diagnostic.details.diagnostics.failure, { phase: "scheduler_request", schedulerMethod: "cron.list" });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /synthetic-private-gateway-error-731/);
+});
+
+test("a lost resume response separates its open gate from scheduler uncertainty and reconciles once", async t => {
+  const { tool } = await fixture(t);
+  t.mock.method(globalThis, "fetch", async (url: string) => Response.json(url.endsWith("/chats") ? { data: [home] } : home));
+  const scope = { account, conversation: "owner" };
+  await updateExperience(scope, () => {}, state => { state.paused = true; state.suspendedJobs = [{ id: "internal-recovery-731", revision: "r1" }]; });
+  const job = { id: "internal-recovery-731", enabled: false, configRevision: "r1", owner: { agentId: "main", sessionKey: "agent:main:main", accountId: "chat" }, delivery: { channel: "plow", accountId: "chat", to: home.uid } };
+  let updates = 0;
+  t.mock.method(scheduler, "request", async (method: string) => {
+    if (method === "cron.list") return { jobs: [structuredClone(job)] };
+    if (method === "cron.update") { updates++; job.enabled = true; job.configRevision = "r2"; throw new Error("accepted enable; response lost"); }
+    return structuredClone(job);
+  });
+  const control = tool("plow_notifications", true);
+  const lost = await control.execute("resume", { action: "resume", scope: "all" });
+  assert.equal(lost.details.status, "incomplete");
+  assert.equal(lost.details.scopeControl.paused, false);
+  assert.equal(lost.details.scheduledDeliveryHere, "not_paused");
+  assert.equal(lost.details.schedulerJobs, "unconfirmed");
+  assert.doesNotMatch(JSON.stringify(lost), /internal-recovery-731|suspendedJobs/);
+  const reconciled = await control.execute("retry", { action: "resume", scope: "all" });
+  assert.equal(reconciled.details.status, "complete");
+  assert.deepEqual((await readExperience(scope)).suspendedJobs, []);
+  assert.equal(updates, 1);
+});
+
+test("revoked notification invocations do not return a partial success receipt", async t => {
+  const { tool } = await fixture(t);
+  let live = true;
+  t.mock.method(scheduler, "request", async () => { live = false; throw new Error("scheduler disconnected"); });
+  const control = tool("plow_notifications", true, { assertInvocationCurrent() { if (!live) throw new Error("invocation revoked"); } });
+  await assert.rejects(control.execute("pause", { action: "pause", scope: "all" }), /invocation revoked/);
+});
+
+test("unreadable notification state fails closed without a fabricated receipt or replacement", async t => {
+  const { tool } = await fixture(t);
+  const scope = { account, conversation: "owner" };
+  await updateExperience(scope, () => {}, state => { state.paused = true; });
+  await writeFile(scopePath(scope), "broken");
+  const control = tool("plow_notifications", true);
+  for (const action of ["get", "pause", "resume"]) {
+    await assert.rejects(control.execute(action, { action, scope: "all" }));
+    assert.equal(await readFile(scopePath(scope), "utf8"), "broken");
+  }
+});
+
+test("a room receipt observes the effective gate while another pause remains active", async t => {
+  const { tool } = await fixture(t);
+  const controls = tool("plow_notifications", false, { senderIsOwner: true, requesterSenderId: "plow-owner" });
+  await updateExperience({ account, conversation: "owner" }, () => {}, state => { state.paused = true; });
+  const roomState = await controls.execute("get", { action: "get" });
+  assert.equal(roomState.details.scopeControl.paused, false);
+  assert.equal(roomState.details.scheduledDeliveryHere, "paused");
+  assert.equal(roomState.details.scopeControl.scope, "conversation");
+  assert.equal(roomState.details.directReplies, "available_during_pause_and_resume");
+  t.mock.method(scheduler, "request", async () => ({ jobs: [] }));
+  const resumed = await controls.execute("resume", { action: "resume" });
+  assert.equal(resumed.details.status, "complete");
+  assert.equal(resumed.details.scopeControl.paused, false);
+  assert.equal(resumed.details.scheduledDeliveryHere, "paused");
+  assert.match(resumed.details.summary, /still paused by the pause for all conversations/);
+  assert.equal((await readExperience({ account, conversation: "owner" })).paused, true);
+});
+
+test("pause persists before scheduler calls, pages jobs, and resume preserves edits", async t => {
+  await fixture(t);
+  const scope = { account, conversation: room.uid }, ctx = { sessionKey: "room-session", agentId: "main", assertInvocationCurrent() {} };
+  const jobs = new Map([
+    ["one", { id: "one", enabled: true, configRevision: "one-a", owner: { sessionKey: ctx.sessionKey, accountId: "chat" } }],
+    ["two", { id: "two", enabled: true, configRevision: "two-a", owner: { sessionKey: ctx.sessionKey, accountId: "chat" } }],
+    ["other", { id: "other", enabled: true, configRevision: "other-a", owner: { sessionKey: "another-room", accountId: "chat" } }],
+  ]);
+  const calls: string[] = [];
+  let pausing = true;
+  const gateway = { async request(method: string, params: any) {
+    calls.push(method);
+    if (method === "cron.list") {
+      assert.equal((await readExperience(scope)).paused, pausing);
+      return { jobs: [...jobs.values()].slice(params.offset, params.offset + 1), hasMore: params.offset < jobs.size - 1, nextOffset: params.offset + 1 };
+    }
+    const job = jobs.get(params.id)!;
+    if (method === "cron.update") {
+      assert.equal(params.expectedConfigRevision, job.configRevision);
+      job.enabled = params.patch.enabled; job.configRevision += "-changed";
+    }
+    return job;
+  } };
+  assert.equal((await notificationControl(gateway, scope, ctx, "pause", false)).paused, true);
+  assert.deepEqual([...jobs.values()].map(job => job.enabled), [false, false, true]);
+  jobs.get("two")!.configRevision = "owner-edited";
+  pausing = false;
+  await notificationControl(gateway, scope, ctx, "resume", false);
+  assert.deepEqual([...jobs.values()].map(job => job.enabled), [true, false, true]);
+  assert.equal((await readExperience(scope)).paused, false);
+  assert.ok(calls.filter(call => call === "cron.list").length >= 3);
+  await assert.rejects(notificationControl({ request: async () => { throw new Error("gateway offline"); } }, scope, ctx, "pause", false), /offline/);
+  assert.equal((await readExperience(scope)).paused, true);
+});
+
+for (const fault of ["before-apply", "after-apply", "before-record"] as const) for (const retryPause of [false, true]) test(`pause journal survives ${fault}; retry pause=${retryPause}`, async t => {
+  await fixture(t);
+  const scope = { account, conversation: room.uid };
+  let currentInvocation = true, interrupted = false, updates = 0;
+  const ctx = { sessionKey: "room-session", agentId: "main", assertInvocationCurrent() { if (!currentInvocation) throw new Error("invocation revoked"); } };
+  const job = { id: "job", enabled: true, configRevision: "original", owner: { sessionKey: ctx.sessionKey, accountId: "chat" },
+    schedule: { kind: "every", everyMs: 60_000 }, state: { lastRunAtMs: 0 }, updatedAtMs: 0 };
+  const gateway = { async request(method: string, params: any) {
+    if (method === "cron.list") return { jobs: [structuredClone(job)], hasMore: false };
+    if (method === "cron.update") {
+      assert.equal((await readExperience(scope)).paused, !params.patch.enabled);
+      assert.equal(params.expectedConfigRevision, job.configRevision);
+      if (!interrupted) {
+        interrupted = true;
+        if (fault === "before-apply") throw new Error("response lost");
+        job.enabled = false; job.configRevision = "disabled"; updates++;
+        if (fault === "after-apply") throw new Error("response lost");
+        currentInvocation = false;
+      } else { job.enabled = params.patch.enabled; job.configRevision = job.enabled ? "enabled" : "disabled"; updates++; }
+    }
+    return structuredClone(job);
+  } };
+  await assert.rejects(notificationControl(gateway, scope, ctx, "pause", false), /response lost|invocation revoked/);
+  const journal = await readExperience(scope);
+  assert.equal(journal.paused, true);
+  assert.equal(journal.suspendedJobs[0].id, job.id);
+  assert.ok(journal.suspendedJobs[0].pendingDefinition, "the intent must survive before an external mutation");
+  currentInvocation = true;
+  // Scheduler runtime activity must not be mistaken for an owner's definition edit.
+  job.state.lastRunAtMs = Date.now(); job.updatedAtMs = Date.now();
+  if (retryPause) await notificationControl(gateway, scope, ctx, "pause", false);
+  await notificationControl(gateway, scope, ctx, "resume", false);
+  assert.equal(job.enabled, true);
+  assert.equal((await readExperience(scope)).paused, false);
+  assert.deepEqual((await readExperience(scope)).suspendedJobs, []);
+  assert.equal(updates, fault === "before-apply" && !retryPause ? 0 : 2, "a confirmed disable is not sent twice");
+});
+
+test("a lost disable response preserves subsequent owner definition edits and pre-disabled jobs", async t => {
+  await fixture(t);
+  const scope = { account, conversation: room.uid }, ctx = { sessionKey: "room-session", agentId: "main", assertInvocationCurrent() {} };
+  const jobs = [
+    { id: "job", enabled: true, configRevision: "original", owner: { sessionKey: ctx.sessionKey, accountId: "chat" }, extensionSetting: { instruction: "original" } },
+    { id: "owner-disabled", enabled: false, configRevision: "manual", owner: { sessionKey: ctx.sessionKey, accountId: "chat" }, extensionSetting: {} },
+  ];
+  let updates = 0;
+  const gateway = { async request(method: string, params: any) {
+    if (method === "cron.list") return { jobs: structuredClone(jobs), hasMore: false };
+    const job = jobs.find(job => job.id === params.id)!;
+    if (method === "cron.update") { updates++; job.enabled = params.patch.enabled; job.configRevision = "disabled"; throw new Error("response lost"); }
+    return structuredClone(job);
+  } };
+  await assert.rejects(notificationControl(gateway, scope, ctx, "pause", false), /response lost/);
+  jobs[0].extensionSetting.instruction = "owner edited"; jobs[0].configRevision = "owner-edit";
+  await notificationControl(gateway, scope, ctx, "resume", false);
+  assert.deepEqual(jobs.map(job => job.enabled), [false, false]);
+  assert.equal(updates, 1);
+  assert.equal((await readExperience(scope)).paused, false);
+});
+
+test("a job moved to another conversation between list and get cannot be disabled", async t => {
+  await fixture(t);
+  const scope = { account, conversation: room.uid }, ctx = { sessionKey: "room-session", agentId: "main", assertInvocationCurrent() {} };
+  const job = { id: "job", enabled: true, configRevision: "original", owner: { sessionKey: ctx.sessionKey, accountId: "chat" } };
+  let updates = 0;
+  const gateway = { async request(method: string) {
+    if (method === "cron.list") return { jobs: [structuredClone(job)], hasMore: false };
+    if (method === "cron.update") updates++;
+    return { ...job, configRevision: "owner-edited", owner: { ...job.owner, sessionKey: "other-room" } };
+  } };
+  await notificationControl(gateway, scope, ctx, "pause", false);
+  assert.equal(updates, 0);
+  assert.deepEqual((await readExperience(scope)).suspendedJobs, []);
+});
+
+test("a lost resume response opens the requested gate before enabling and retains its journal for retry", async t => {
+  await fixture(t);
+  const scope = { account, conversation: room.uid }, ctx = { sessionKey: "room-session", agentId: "main", assertInvocationCurrent() {} };
+  const job = { id: "job", enabled: true, configRevision: "original", owner: { sessionKey: ctx.sessionKey, accountId: "chat" } };
+  let failResume = true, updates = 0;
+  const gateway = { async request(method: string, params: any) {
+    if (method === "cron.list") return { jobs: [structuredClone(job)], hasMore: false };
+    if (method === "cron.update") {
+      assert.equal(params.expectedConfigRevision, job.configRevision);
+      job.enabled = params.patch.enabled; job.configRevision = job.enabled ? "enabled" : "disabled"; updates++;
+      if (job.enabled) assert.equal((await readExperience(scope)).paused, false, "the enabled job must be allowed to deliver even if its response is lost");
+      if (job.enabled && failResume) { failResume = false; throw new Error("resume response lost"); }
+    }
+    return structuredClone(job);
+  } };
+  await notificationControl(gateway, scope, ctx, "pause", false);
+  await assert.rejects(notificationControl(gateway, scope, ctx, "resume", false), /resume response lost/);
+  assert.equal((await readExperience(scope)).paused, false);
+  await notificationControl(gateway, scope, ctx, "resume", false);
+  assert.equal((await readExperience(scope)).paused, false);
+  assert.equal(updates, 2);
+});
+
 test("quiet hours handle midnight and timezone transitions without muting timed reminders", async t => {
   await fixture(t);
   const scope = { account, conversation: "owner" };
   const state = await updateExperience(scope, () => {}, value => { value.preferences.quietHours = { start: "22:00", end: "08:00", timezone: "America/New_York" }; });
   assert.equal(quietNow(state, new Date("2026-03-08T07:30:00Z")), true);
   assert.equal(quietNow(state, new Date("2026-03-08T16:00:00Z")), false);
+});
+
+test("paused scheduled tool sends are blocked while ordinary replies retain access", async t => {
+  await fixture(t);
+  let hook: any;
+  installExperienceTools({ config: { channels: { plow: account } }, registerTool() {}, on(name: string, callback: unknown) { if (name === "before_tool_call") hook = callback; } } as any, () => account);
+  t.mock.method(scheduler, "request", async () => ({ id: "job", enabled: true, sessionKey: "agent:main:plow:chat:group:cht_room", delivery: { channel: "plow", to: home.uid, accountId: "chat" } }));
+  const context = { agentId: "main", sessionKey: "agent:main:cron:job:run:fixture" };
+  assert.equal(await hook({ toolName: "message", params: {} }, context), undefined);
+  await updateExperience({ account, conversation: room.uid }, () => {}, state => { state.paused = true; });
+  assert.equal((await hook({ toolName: "message", params: {} }, context)).block, true);
+  assert.equal(await hook({ toolName: "message", params: {} }, { ...context, sessionKey: "agent:main:main" }), undefined);
+  t.mock.method(scheduler, "request", async () => { throw new Error("scheduler offline"); });
+  assert.equal((await hook({ toolName: "message", params: {} }, context)).block, true);
+});
+
+test("globally paused phone rooms report the gate without exposing private owner state", async t => {
+  await fixture(t);
+  await updateExperience({ account, conversation: "owner" }, () => {}, state => {
+    state.paused = true; state.preferences.name = "PRIVATE_PROFILE_CANARY";
+  });
+  const context = await experienceContext(account, room.uid, false);
+  assert.equal(context.notifications_paused, true);
+  assert.ok(!("owner_preferences" in context));
+  assert.ok(!JSON.stringify(context).includes("PRIVATE_PROFILE_CANARY"));
+  assert.equal((await experienceContext({ ...account, accountId: "email" }, room.uid, false)).notifications_paused, false);
 });
 
 test("manifest persona composition retains base policy and existing explicit defaults", async t => {

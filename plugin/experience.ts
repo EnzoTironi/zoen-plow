@@ -1,9 +1,11 @@
 import { z } from "zod";
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
-import { accepts, request, normalizedHandle, type Account, type Chat } from "./transport.ts";
+import { accepts, request, normalizedHandle, ownerChat, type Account, type Chat } from "./transport.ts";
 import { conversationUid, ownerDmTurn } from "./threads.ts";
-import { preferencesSchema, roomSchema, readExperience, updateExperience, randomUUID, type Scope } from "./experience-state.ts";
+import { preferencesSchema, roomSchema, readExperience, updateExperience, randomUUID, scopePath, type Scope, type ExperienceState } from "./experience-state.ts";
 import { threadIdempotencyKey } from "./delivery-guard.ts";
+import { scheduler, type Scheduler } from "./scheduler.ts";
 import { personalitySchema, personalityPatchSchema, personalityInstructions } from "../boot/personality.ts";
 
 type Context = OpenClawPluginToolContext<2>;
@@ -41,6 +43,126 @@ const taskArgs = z.object({
   deadline: z.string().datetime().optional(), step: z.string().max(1000).optional(),
   evidence: z.string().trim().min(1).max(2000).optional(), delivery: z.enum(["confirmed", "failed", "unknown"]).optional(),
 }).strict();
+const notifyArgs = z.object({ action: z.enum(["get", "pause", "resume"]), scope: z.enum(["conversation", "all"]).default("conversation"), diagnostics: z.boolean().default(false) }).strict();
+const jobSchema = z.object({
+  id: z.string(), enabled: z.boolean(), configRevision: z.string().optional(), agentId: z.string().optional(), sessionKey: z.string().optional(),
+  owner: z.object({ agentId: z.string().optional(), sessionKey: z.string().optional(), accountId: z.string().optional() }).passthrough().optional(),
+  delivery: z.object({ channel: z.string().optional(), to: z.string().optional(), accountId: z.string().optional() }).passthrough().optional(),
+}).passthrough();
+
+function notificationTargets(job: z.infer<typeof jobSchema>) {
+  const session = job.owner?.sessionKey ?? job.sessionKey;
+  return [job.delivery?.to?.replace(/^plow:/i, ""), session === "agent:main:main" ? "plow-owner" : session?.includes(":plow:") ? session.split(":").at(-1) : undefined];
+}
+async function pausedScope(account: Account, targets: (string | undefined)[], except?: string): Promise<Scope | undefined> {
+  let ownerUid: Promise<string> | undefined;
+  for (const target of new Set(["owner", ...targets])) {
+    if (!target) continue;
+    const uid = ["plow-owner", "plow-heartbeat"].includes(target) ? await (ownerUid ??= ownerChat(account).then(chat => chat.uid)) : target;
+    if (uid !== except && (await readExperience({ account, conversation: uid })).paused) return { account, conversation: uid };
+  }
+}
+export async function notificationPaused(account: Account, destination?: string, jobId?: string): Promise<boolean> {
+  if (await pausedScope(account, [destination])) return true;
+  if (!jobId) return false;
+  const job = jobSchema.parse(await scheduler.request("cron.get", { id: jobId }));
+  return !!await pausedScope(account, notificationTargets(job));
+}
+
+// Pinned 2026.9.6 cron.get read-view fields that change without a config edit.
+// Preserve every other field, including extension fields, when reconciling a lost response.
+const jobRuntimeFields = new Set(["configRevision", "state", "updatedAtMs", "effectiveAgentId", "nextRunAtMs", "lastRunAtMs", "lastRunStatus", "lastRunError", "lastDelivered", "lastDeliveryStatus", "lastDeliveryError", "deliverySuppressionReason", "lastFailureNotificationDelivered", "lastFailureNotificationDeliveryStatus", "lastFailureNotificationDeliveryError"]);
+function disabledDefinition(job: z.infer<typeof jobSchema>) {
+  return Object.fromEntries(Object.entries({ ...job, enabled: false }).filter(([key]) => !jobRuntimeFields.has(key)));
+}
+async function* cronJobs(gateway: Scheduler, agentId: string) {
+  let offset = 0;
+  for (let page = 0; page < 100; page++) {
+    const result = z.object({ jobs: z.array(jobSchema), hasMore: z.boolean().optional(), nextOffset: z.number().nullish() }).passthrough().parse(await gateway.request("cron.list", { includeDisabled: true, includeDeliveryPreviews: false, sortBy: "name", sortDir: "asc", limit: 100, offset, agentId }));
+    yield* result.jobs;
+    if (!result.hasMore) return;
+    if (result.nextOffset == null || result.nextOffset <= offset || page === 99) throw new Error("Scheduler pagination was incomplete; pause remains active");
+    offset = result.nextOffset;
+  }
+}
+
+const controlKey = Symbol.for("plow.notification.controls");
+const controls = ((globalThis as typeof globalThis & { [controlKey]?: Map<string, Promise<void>> })[controlKey] ??= new Map<string, Promise<void>>());
+export async function notificationControl(gateway: Scheduler, scope: Scope, ctx: Pick<Context, "assertInvocationCurrent" | "sessionKey" | "agentId">, action: "get" | "pause" | "resume", all: boolean, cancelRunning?: (job: z.infer<typeof jobSchema>) => Promise<void>) {
+  const key = scopePath({ ...scope, conversation: "owner" });
+  const previous = controls.get(key) ?? Promise.resolve();
+  const operation = previous.catch(() => {}).then(() => applyNotificationControl(gateway, scope, ctx, action, all, cancelRunning));
+  const settled = operation.then(() => {}, () => {});
+  controls.set(key, settled);
+  void settled.then(() => { if (controls.get(key) === settled) controls.delete(key); });
+  return await operation;
+}
+async function applyNotificationControl(gateway: Scheduler, scope: Scope, ctx: Pick<Context, "assertInvocationCurrent" | "sessionKey" | "agentId">, action: "get" | "pause" | "resume", all: boolean, cancelRunning?: (job: z.infer<typeof jobSchema>) => Promise<void>) {
+  ctx.assertInvocationCurrent();
+  if (action === "get") {
+    const state = await readExperience(scope);
+    return { paused: state.paused, suspendedJobs: state.suspendedJobs.map(job => job.id) };
+  }
+  // Persist the gate before touching the scheduler, including on partial failure.
+  if (action === "pause") await updateExperience(scope, ctx.assertInvocationCurrent, state => { state.paused = true; });
+  const agentId = ctx.agentId ?? "main";
+  const state = await readExperience(scope);
+  const recordSuspended = (target: Scope, entry: ExperienceState["suspendedJobs"][number]) => updateExperience(target, ctx.assertInvocationCurrent, value => {
+    value.suspendedJobs = [...value.suspendedJobs.filter(job => job.id !== entry.id), entry];
+  });
+  const belongs = (job: z.infer<typeof jobSchema>) => (job.owner?.agentId ?? job.agentId ?? agentId) === agentId
+    && (all ? job.delivery?.channel === "plow" : (job.owner?.sessionKey ?? job.sessionKey) === ctx.sessionKey || job.delivery?.to?.replace(/^plow:/i, "") === scope.conversation)
+    && (job.delivery?.accountId ?? job.owner?.accountId ?? "chat") === "chat";
+  if (action === "pause") {
+    for await (const job of cronJobs(gateway, agentId)) {
+      if (!belongs(job)) continue;
+      const current = jobSchema.parse(await gateway.request("cron.get", { id: job.id }));
+      if (!belongs(current)) continue;
+      if (!current.configRevision) throw new Error("Scheduler did not supply a revision; pause remains active, retry after checking the gateway");
+      const recorded = state.suspendedJobs.find(item => item.id === current.id);
+      if (!current.enabled) {
+        if (recorded?.pendingDefinition && isDeepStrictEqual(recorded.pendingDefinition, disabledDefinition(current))) {
+          await recordSuspended(scope, { id: current.id, revision: current.configRevision });
+        }
+        if (recorded) await cancelRunning?.(current);
+        continue;
+      }
+      await recordSuspended(scope, { id: current.id, revision: current.configRevision, pendingDefinition: disabledDefinition(current) });
+      ctx.assertInvocationCurrent();
+      const updated = jobSchema.parse(await gateway.request("cron.update", { id: job.id, expectedConfigRevision: current.configRevision, patch: { enabled: false } }));
+      if (!updated.configRevision) throw new Error("Scheduler did not confirm the disabled revision");
+      await recordSuspended(scope, { id: job.id, revision: updated.configRevision });
+      await cancelRunning?.(current);
+    }
+  } else {
+    // An accepted enable may lose its response. Open the requested gate first
+    // so a one-shot job can deliver; keep the journal until effects reconcile.
+    await updateExperience(scope, ctx.assertInvocationCurrent, value => { value.paused = false; });
+    const existing = new Set<string>();
+    for await (const job of cronJobs(gateway, agentId)) existing.add(job.id);
+    for (const suspended of state.suspendedJobs) {
+      if (existing.has(suspended.id)) {
+        const current = jobSchema.parse(await gateway.request("cron.get", { id: suspended.id }));
+        const unchanged = suspended.pendingDefinition ? isDeepStrictEqual(suspended.pendingDefinition, disabledDefinition(current)) : current.configRevision === suspended.revision;
+        if (!current.enabled && belongs(current) && unchanged) {
+          if (!current.configRevision) throw new Error("Scheduler did not supply a revision; resume is incomplete");
+          const remainingPause = await pausedScope(scope.account, notificationTargets(current), scope.conversation);
+          if (remainingPause) {
+            // Write the receiving journal first. A crash leaves two recoverable copies.
+            await recordSuspended(remainingPause, { id: suspended.id, revision: current.configRevision });
+          } else {
+            ctx.assertInvocationCurrent();
+            await gateway.request("cron.update", { id: suspended.id, expectedConfigRevision: current.configRevision, patch: { enabled: true } });
+          }
+        }
+      }
+      await updateExperience(scope, ctx.assertInvocationCurrent, value => { value.suspendedJobs = value.suspendedJobs.filter(job => job.id !== suspended.id); });
+    }
+  }
+  const final = await readExperience(scope);
+  return { paused: final.paused, suspendedJobs: final.suspendedJobs.map(job => job.id) };
+}
+
 export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx: Context) => Account) {
   function tool<S extends z.ZodType>(name: string, description: string, schema: S, execute: (ctx: Context, args: z.output<S>, id: string) => Promise<unknown>) {
     api.registerTool({ contextVersion: 2, create: ctx => ({
@@ -55,7 +177,7 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
       },
     }) });
   }
-  tool("plow_preferences", "Inspect, set or reset confirmed private preferences in the owner's main DM. Changes survive restart and do not change authority. Quiet hours are stored here; the notification layer enforces them for optional heartbeats.", preferenceArgs, async (ctx, args) => {
+  tool("plow_preferences", "Inspect, set or reset confirmed private preferences in the owner's main DM. Changes survive restart and do not change authority. Quiet hours affect optional heartbeats, not timed reminders.", preferenceArgs, async (ctx, args) => {
     const scope = await privateScope(accountFor(ctx), ctx);
     if (args.action === "get") return (await readExperience(scope)).preferences;
     if (args.action === "set" && !args.preferences) throw new Error("Supply the confirmed preferences");
@@ -136,8 +258,79 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
     const stateJson = { ...previous, evidence: args.evidence, delivery: args.delivery ?? null };
     return args.action === "finish" ? await flows.finish({ ...mutation, stateJson }) : await flows.fail({ ...mutation, stateJson, blockedSummary: args.evidence });
   });
+  tool("plow_notifications", "Inspect or persist pause/resume for scheduled phone work; scope=all is owner-main-DM only. Pause blocks scheduled delivery and new jobs; direct replies work. Resume reconciles only unchanged jobs. Receipts separate the delivery gate from unconfirmed scheduler changes. Get does not inspect jobs. Use diagnostics=true only for explicitly requested internal recovery details; journal IDs are intent, never live job status.", notifyArgs, async (ctx, args) => {
+    const account = accountFor(ctx);
+    if (account.accountId !== "chat") throw new Error("Notification controls require a phone conversation");
+    const scope = args.scope === "all" ? await privateScope(account, ctx) : await activeScope(account, ctx, "plow_notifications", args.action !== "get");
+    let phase = "persist_scope_gate", schedulerMethod: string | undefined;
+    const gateway: Scheduler = { async request(method, params) {
+      phase = "scheduler_request"; schedulerMethod = method;
+      const result = await scheduler.request(method, params);
+      phase = "reconcile_response_or_journal";
+      return result;
+    } };
+    const present = async (state: { paused: boolean; suspendedJobs: string[] }, complete: boolean, failure?: { phase: string; schedulerMethod?: string }) => {
+      phase = "read_delivery_gates";
+      const deliveryPaused = await notificationPaused(account, conversationUid(ctx));
+      ctx.assertInvocationCurrent();
+      const delivery = !deliveryPaused ? "Scheduled delivery here is not paused"
+        : !state.paused ? `Scheduled delivery here is still paused by ${args.scope === "all" ? "this conversation's pause" : "the pause for all conversations"}`
+        : "Scheduled delivery here is paused";
+      const jobs = args.action === "get" ? "Job state was not checked."
+        : complete ? "Eligible job changes were reconciled." : "Scheduler changes are unconfirmed.";
+      return {
+        status: args.action === "get" ? "observed" : complete ? "complete" : "incomplete",
+        summary: `${delivery}; direct replies still work. ${jobs}`,
+        scheduledDeliveryHere: deliveryPaused ? "paused" : "not_paused",
+        directReplies: "available_during_pause_and_resume",
+        schedulerJobs: args.action === "get" ? "not_checked" : complete ? "eligible_jobs_reconciled" : "unconfirmed",
+        scopeControl: { scope: args.scope, paused: state.paused },
+        ...(args.diagnostics ? { diagnostics: { suspendedJobs: state.suspendedJobs, meaning: "Recovery intent; not current job state", ...(failure ? { failure } : {}) } } : {}),
+      };
+    };
+    try {
+      const state = await notificationControl(gateway, scope, ctx, args.action, args.scope === "all", async job => {
+        phase = "cancel_active_runs"; schedulerMethod = undefined;
+        const sessionKey = job.owner?.sessionKey ?? job.sessionKey;
+        if (!sessionKey) return;
+        const binding = { sessionKey, agentId: ctx.agentId };
+        const runs = await api.runtime.tasks.async.runs.bindSession(binding).list();
+        for (const run of runs) if (run.sourceId === job.id || run.sourceId === `cron:${job.id}`) {
+          if (!["queued", "running", "waiting", "blocked"].includes(run.status)) continue;
+          ctx.assertInvocationCurrent();
+          const result = await api.runtime.tasks.runs.bindSession(binding).cancel({ taskId: run.id, cfg: ctx.config! });
+          if (!result.cancelled) throw new Error("The job is disabled but its active run could not be cancelled; check task status before confirming a complete stop");
+        }
+      });
+      return await present(state, true);
+    } catch (error) {
+      if (args.action === "get") throw error;
+      const failure = { phase, ...(schedulerMethod ? { schedulerMethod } : {}) };
+      ctx.assertInvocationCurrent();
+      const state = await readExperience(scope);
+      ctx.assertInvocationCurrent();
+      api.logger?.info(`plow notification action=${args.action} result=incomplete phase=${failure.phase} method=${failure.schedulerMethod ?? "none"}`);
+      return await present({ paused: state.paused, suspendedJobs: state.suspendedJobs.map(job => job.id) }, false, failure);
+    }
+  });
   api.on("before_tool_call", async (event, ctx) => {
     if (ctx.agentId === "plow-worker" && !["web_search", "web_fetch"].includes(event.toolName)) return { block: true, blockReason: "Background workers perform read-only research and analysis; the conversational agent owns messages, memory, scheduling and mutations" };
     if (event.toolName === "sessions_spawn" && (event.params?.agentId !== "plow-worker" || (event.params?.runtime && event.params.runtime !== "subagent"))) return { block: true, blockReason: "Delegate bounded research/analysis to agentId=plow-worker using the native subagent runtime" };
+    const cronId = ctx.sessionKey?.match(/^agent:[^:]+:cron:([^:]+)/)?.[1];
+    if (cronId && ["message", "plow_reply_to", "plow_send_email", "plow_start_thread"].includes(event.toolName)
+      && !(event.toolName === "plow_send_email" && event.params?.action === "list")) {
+      try {
+        const configured = api.config?.channels?.plow as Account | undefined;
+        if (!configured) throw new Error("Plow configuration unavailable");
+        const account = { ...configured, accountId: "chat" };
+        if (await notificationPaused(account, undefined, cronId)) return { block: true, blockReason: "Scheduled notifications are paused in their source, destination or global scope" };
+      } catch { return { block: true, blockReason: "Scheduled notification state cannot be verified; inspect the scheduler before retrying" }; }
+    }
+    if (event.toolName !== "automations" || event.params?.action !== "add") return;
+    const account = api.config?.channels?.plow as Account | undefined;
+    if (!account) return { block: true, blockReason: "Plow configuration is unavailable" };
+    if ((await readExperience({ account, conversation: "owner" })).paused) return { block: true, blockReason: "Scheduled notifications are paused; use plow_notifications to resume first" };
+    const uid = ctx.sessionKey === "agent:main:main" ? (await ownerChat({ ...account, accountId: "chat" })).uid : ctx.sessionKey?.split(":").at(-1);
+    if (uid?.startsWith("cht_") && (await readExperience({ account, conversation: uid })).paused) return { block: true, blockReason: "This room's scheduled notifications are paused" };
   });
 }
