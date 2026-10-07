@@ -159,6 +159,13 @@ on a meaningful change, completion, failure or required input.
 
 ## Conversational coordinator and workers
 
+For one worker, use `sessions_spawn` directly. An accepted launch and a later
+collection error are different outcomes: inspect the existing worker before
+replying or retrying. A failed collection does not prove that nothing started.
+The native collector context preserves the admitted session identity even when
+the owner's phone route is bound to the main session. Batches can use native
+collectors, but ownership checks still reject other sessions and agents.
+
 The conversational agent owns user messages, personality, approvals, private state
 and mutations. Long read-only analysis or public research can use the native
 `plow-worker` background agent. Its separate workspace receives a bounded

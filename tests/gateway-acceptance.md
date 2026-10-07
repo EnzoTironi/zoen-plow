@@ -30,6 +30,42 @@ report. Keep separate paths for before and after candidates.
 Model responses are deterministic fixtures; this checks integration behavior,
 not the quality of a real model's reasoning or tone.
 
+The worker-settlement race uses a test-only child IPC preload with two bounded
+barriers. One holds only the native `session:agent:main:main` lane. The other
+delays completion of the Plow transport's local checkpoint rename, matching
+both the owned `cht_home.tmp` checkpoint path and the exact synthetic status UID
+in its contents. This is a local adoption-checkpoint barrier, not an HTTP ACK.
+Every other filesystem operation proceeds normally; release delegates the
+original rename unchanged. Cleanup releases both barriers, including on IPC
+disconnect. No admission, authority, restart claim or native queue order changes.
+
+The status question is first durably adopted while its checkpoint is held. The
+fixture verifies its native SQLite anchor before releasing the worker, then
+lets native requester settlement finish before completing the original rename.
+Only afterward can the foreground model run. The settled recommendation and
+foreground status must each deliver once. The original human event, sender and
+transport metadata, active anchor and separate foreground custody must survive;
+neither internal model nor transcript prompt may consume the queued question.
+The report records observed lane counts, native settlement custody and exact
+checkpoint intervention. Empty/internal orphan cleanup and native restart
+preservation are covered separately by `orphan-admission.test.ts`. Before and
+after runs must use distinct report paths. This controlled race validates the
+integration boundary; deterministic model replies do not establish real-model
+quality or universal end-to-end coverage.
+
+After inspecting the race, the parent releases its cached native SQLite handles
+under this fixture's temporary state directory. Cleanup does the same before
+removing that directory. This lets the existing backup/restore and Doctor checks
+run with their normal database ownership protections.
+
+`foreground-custody.test.ts` executes the pinned replay preparation and append
+wrapper with native SQLite, factory recorders and the existing transcript guard.
+It checks that the admitted owner or guest retains the same immutable source,
+the following assistant appends after settlement, and the model still reads
+only its original admitted context. Forged, blocked, sent, changed or foreign
+admissions are rejected; revoked writers, stale versions, detached anchors and
+aborts cannot pass the synchronous append boundary.
+
 The detached reminder also attempts a conversation-scoped notification lookup
 and a direct send. Both native guard receipts must give final-text/scheduler
 delivery guidance; the reminder must still deliver exactly once. Heartbeat

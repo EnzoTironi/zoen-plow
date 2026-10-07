@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 import { cp, mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { describeImageFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { renderConfig, syncConfig } from "../boot/config.ts";
@@ -29,6 +30,7 @@ process.env.OPENCLAW_INCLUDE_ROOTS = root;
 process.env.PLOW_AGENT_TOKEN = "offline-acceptance";
 process.env.OPENCLAW_GATEWAY_PASSWORD = randomBytes(32).toString("hex");
 delete process.env.OPENCLAW_GATEWAY_TOKEN;
+const { c: closeParentDatabases } = await import("/app/dist/openclaw-agent-db-lifecycle-D7S9DdJC.mjs");
 const owner = { type: "member" as const, uid: "mem_owner", role: "owner", display_name: "Pat", provider_key: "+15550000001" };
 const guest = { ...owner, uid: "mem_guest", role: "member", display_name: "Lee", provider_key: "+15550000002" };
 const self = { type: "agent" as const, relationship: "self", line: { uid: "ln_acceptance", display_name: "Cedar" } };
@@ -42,12 +44,15 @@ const modelRequests: Record<string, any>[] = [];
 const callsIssued = new Set<string>();
 const cancelledTasks: string[] = [];
 const safetyOutcomes: object[] = [];
+const raceOutcomes: object[] = [];
 const evidence: { check: string; result: string }[] = [];
 let child: ChildProcess | undefined, log = "";
 let completed = false, safetyHeartbeatAt = 0, autoDisableInterruptStarted = false;
 let releaseReminder: (() => void) | undefined;
 let cancelReminderClosed = false, cancelReminderStarted = false;
 let releaseWorker: (() => void) | undefined, cancelWorkerClosed = false, workerFinished = false;
+let releaseRaceWorker: (() => void) | undefined;
+let raceChild: { runId: string; childSessionKey: string } | undefined;
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const record = (check: string, result: string) => { evidence.push({ check, result }); console.log(`PASS ${check}: ${result}`); };
 async function until(check: () => boolean | Promise<boolean>, label: string, timeout = 90_000) {
@@ -80,6 +85,7 @@ const server = createServer(async (req, res) => {
       await new Promise<void>(resolve => { res.once("close", () => { cancelReminderClosed = true; resolve(); }); });
     }
     if (worker && text.includes("WORKER_HELD")) await new Promise<void>(resolve => { releaseWorker = resolve; });
+    if (worker && text.includes("WORKER_RACE_HELD")) await new Promise<void>(resolve => { releaseRaceWorker = resolve; });
     if (worker && text.includes("WORKER_CANCEL_HELD")) await new Promise<void>(resolve => { res.once("close", () => { cancelWorkerClosed = true; resolve(); }); });
     if (res.destroyed) return;
     if (text.includes("IN_FLIGHT_ACCEPTANCE")) await new Promise<void>(resolve => { releaseReminder = resolve; });
@@ -91,7 +97,16 @@ const server = createServer(async (req, res) => {
     const taskList = toolResults.flatMap((result: any) => result.action === "list" ? result.tasks ?? [] : []);
     const activeTask = taskList.findLast((task: any) => task.runtime === "subagent" && ["queued", "running"].includes(task.status));
     const hasResult = (id: string) => callsIssued.has(id);
-    if (!worker && !scheduled && latestUser.includes("CREATE_REMINDER_ACCEPTANCE") && !hasResult("fixture-create-reminder")) call = { id: "fixture-create-reminder", name: "automations", arguments: JSON.stringify({ action: "add", job: { name: "Created through native tool", sessionTarget: "current", deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, payload: { kind: "agentTurn", message: "REMINDER_ACCEPTANCE: remind Pat to check the dinner plan" } } }) };
+    // Native scheduled prompts quote recent conversation, including these
+    // markers. Those quotations do not make a cron run a foreground request.
+    const raceSettle = !worker && !scheduled && latestUser.includes("[Subagent Context]") && latestUser.includes("RACE_WORKER_RESULT");
+    const raceStart = !worker && !scheduled && !raceSettle && latestUser.includes("WORKER_RACE_START");
+    const raceStatus = !worker && !scheduled && !raceSettle && latestUser.includes("WORKER_RACE_STATUS");
+    if (raceStart) raceChild ??= toolResults.find(result => result.status === "accepted" && typeof result.runId === "string" && typeof result.childSessionKey === "string");
+    if (raceStart && !hasResult("fixture-race-start")) call = { id: "fixture-race-start", name: "sessions_spawn", arguments: JSON.stringify({ agentId: "plow-worker", label: "fixture-race-worker", task: "WORKER_RACE_HELD: Compare Thursday 7 at $20 and Friday 6 at $25. Return RACE_WORKER_RESULT with the cheaper option and the $5 difference. No messages or mutations.", mode: "run" }) };
+    else if (raceStart && !hasResult("fixture-race-yield")) call = { id: "fixture-race-yield", name: "sessions_yield", arguments: JSON.stringify({ message: "The native dinner comparison is pending; return its recommendation after completion.", acknowledgment: "Race comparison started; I will return its result." }) };
+    else if (raceSettle && !hasResult("fixture-race-completion")) call = { id: "fixture-race-completion", name: "message", arguments: JSON.stringify({ action: "send", channel: "plow", target: home.uid, message: "Race worker recommendation: Thursday at 7 costs $20, which is $5 cheaper than Friday at 6." }) };
+    else if (!worker && !scheduled && latestUser.includes("CREATE_REMINDER_ACCEPTANCE") && !hasResult("fixture-create-reminder")) call = { id: "fixture-create-reminder", name: "automations", arguments: JSON.stringify({ action: "add", job: { name: "Created through native tool", sessionTarget: "current", deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, payload: { kind: "agentTurn", message: "REMINDER_ACCEPTANCE: remind Pat to check the dinner plan" } } }) };
     else if (scheduled && latestUser.includes("SCHEDULED_TOOL_GUARD") && !hasResult("fixture-scheduled-notifications")) call = { id: "fixture-scheduled-notifications", name: "plow_notifications", arguments: JSON.stringify({ action: "get", scope: "conversation", diagnostics: false }) };
     else if (scheduled && latestUser.includes("SCHEDULED_TOOL_GUARD") && !hasResult("fixture-scheduled-send")) call = { id: "fixture-scheduled-send", name: "plow_reply_to", arguments: JSON.stringify({ chat_uid: home.uid, text: "Duplicate scheduled tool send must be blocked." }) };
     else if (!worker && !scheduled && latestUser.includes("PAUSE_ACTIVE_CRON_ACCEPTANCE") && !hasResult("fixture-pause-active-cron")) call = { id: "fixture-pause-active-cron", name: "plow_notifications", arguments: JSON.stringify({ action: "pause", scope: "all", diagnostics: false }) };
@@ -101,7 +116,11 @@ const server = createServer(async (req, res) => {
     else if (!worker && text.includes("WORKER_START") && !hasResult("fixture-worker-start")) call = { id: "fixture-worker-start", name: "sessions_spawn", arguments: JSON.stringify({ agentId: "plow-worker", task: "WORKER_HELD: Compare two hypothetical dinner times, Thursday 7 or Friday 6. Return the analysis with those facts as evidence. No secrets, messages or mutations.", mode: "run" }) };
     // Native tool follow-ups can retain a prior user envelope. Match the later
     // worker phase before that envelope's earlier paused-reply marker.
-    const content = scheduled && latestUser.includes("SCHEDULED_TOOL_GUARD") ? (body.messages.some((message: any) => message.role === "tool" && JSON.stringify(message.content).includes("Return the requested reminder or result as your final text")) ? "Reminder: check the train timetable." : "Scheduled send guard did not return its delivery instruction.")
+    const content = raceSettle ? "NO_REPLY"
+      : raceStatus ? "Race status: the comparison is complete. Thursday at 7 is $20; Friday at 6 is $25, so Thursday is $5 cheaper."
+      : worker && text.includes("WORKER_RACE_HELD") ? JSON.stringify({ status: "completed", summary: "RACE_WORKER_RESULT: Thursday at 7 is $20; Friday at 6 is $25. Thursday is $5 cheaper.", evidence: ["Both prices and times are supplied in the task."] })
+      : raceStart ? "NO_REPLY"
+      : scheduled && latestUser.includes("SCHEDULED_TOOL_GUARD") ? (body.messages.some((message: any) => message.role === "tool" && JSON.stringify(message.content).includes("Return the requested reminder or result as your final text")) ? "Reminder: check the train timetable." : "Scheduled send guard did not return its delivery instruction.")
       : !scheduled && latestUser.includes("AUTO_DISABLED_SAFETY") ? (latestUser.includes("AUTO_DISABLED_SAFETY_PAUSED") ? "Auto-disabled notice from the paused source room." : "Auto-disabled notice from the unpaused source room.")
       : !scheduled && latestUser.includes("SAFETY_FALLBACK_ACCEPTANCE") ? (latestUser.includes("SAFETY_FALLBACK_ACCEPTANCE_DESTINATION") ? "Safety notice for the paused destination." : latestUser.includes("SAFETY_FALLBACK_ACCEPTANCE_PAUSED") ? "Safety notice from the paused source room." : "Safety notice from the unpaused source room.")
       : worker ? JSON.stringify({ status: "completed", summary: "Thursday at 7 is one option; Pat still needs to confirm.", evidence: ["The assignment supplies Thursday 7 and Friday 6 as options."] })
@@ -169,14 +188,40 @@ const url = "http://127.0.0.1:3000/plugins/plow/personality/api";
 const rpc = (method: string, params: Record<string, unknown>) => callGatewayFromCli(method, { url: "ws://127.0.0.1:3000", password: process.env.OPENCLAW_GATEWAY_PASSWORD, timeout: "10000", json: true }, params, { scopes: ["operator.admin"] });
 async function start(afterIntentionalCrash = false) {
   log = "";
-  child = spawn(process.execPath, ["/app/openclaw.mjs", "gateway"], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+  child = spawn(process.execPath, ["--import", new URL("./gateway-lane-barrier.mjs", import.meta.url).pathname, "/app/openclaw.mjs", "gateway"], { env: process.env, stdio: ["ignore", "pipe", "pipe", "ipc"] });
   child.stdout?.on("data", value => { log = (log + value.toString()).slice(-128_000); });
   child.stderr?.on("data", value => { log = (log + value.toString()).slice(-128_000); });
   await until(() => healthy(), "gateway readiness");
-  if (afterIntentionalCrash && log.includes("restart-loop breaker tripped")) await rpc("channels.start", { channel: "plow" });
+  // Backup restoration and the paired SIGKILL cases can reach the native
+  // crash-loop threshold. Exercise its documented manual channel recovery
+  // only after a deliberate crash; ordinary startup must still autostart.
+  if (afterIntentionalCrash && log.includes("restart-loop breaker tripped")) {
+    await rpc("channels.start", { channel: "plow" });
+  }
   await until(() => ws.clients.size > 0, "Plow fixture connection");
   await until(async () => { try { await readFile(join(root, "plow-checkpoints", group.uid)); return true; } catch { return false; } }, "Plow history initialization");
 }
+const laneResponse = z.object({ kind: z.literal("acceptance-lane"), id: z.number().int(), error: z.string().optional(),
+  snapshot: z.object({ lane: z.literal("session:agent:main:main"), queuedCount: z.number().int().nonnegative(), activeCount: z.number().int().nonnegative() }).passthrough(),
+  checkpoint: z.object({ phase: z.enum(["idle", "armed", "held", "released"]), uid: z.string().optional(), contents: z.object({ uid: z.string(), recent: z.array(z.string()) }).optional() }) });
+let laneRequestId = 0;
+async function barrier(action: "hold" | "snapshot" | "release" | "checkpoint-hold" | "checkpoint-release", uid?: string) {
+  const gateway = child; assert.ok(gateway?.connected);
+  const id = ++laneRequestId;
+  return await new Promise<z.infer<typeof laneResponse>>((resolve, reject) => {
+    const finish = (error?: Error) => { clearTimeout(timer); gateway.off("message", receive); if (error) reject(error); };
+    const receive = (value: unknown) => {
+      const parsed = laneResponse.safeParse(value);
+      if (!parsed.success || parsed.data.id !== id) return;
+      finish(parsed.data.error ? new Error(parsed.data.error) : undefined);
+      if (!parsed.data.error) resolve(parsed.data);
+    };
+    const timer = setTimeout(() => finish(new Error(`Timed out: owned native lane ${action}`)), 10_000);
+    gateway.on("message", receive);
+    gateway.send({ kind: "acceptance-lane", id, action, uid }, error => { if (error) finish(error); });
+  });
+}
+async function lane(action: "hold" | "snapshot" | "release") { return (await barrier(action)).snapshot; }
 async function stop() {
   if (!child || child.exitCode !== null) return;
   const exited = once(child, "exit"); child.kill("SIGTERM");
@@ -225,6 +270,86 @@ try {
 
   const context = { sessionKey: "agent:main:main", agentId: "main", assertInvocationCurrent() {} };
   const scope = { account, conversation: home.uid };
+  const raceStartId = await message(home.uid, "WORKER_RACE_START: compare Thursday at 7 for $20 with Friday at 6 for $25 in a native background worker", owner);
+  await until(() => !!releaseRaceWorker && !!raceChild && log.includes(`completed chat=${home.uid} message=${raceStartId}`), "race worker accepted and its requester yielded");
+  const hold = await lane("hold");
+  assert.equal(hold.activeCount, 1); assert.equal(hold.queuedCount, 0);
+  const expectedStatusId = `msg_in_${inbound.length}`;
+  await barrier("checkpoint-hold", expectedStatusId);
+  const statusId = await message(home.uid, "WORKER_RACE_STATUS: What is the status of that dinner comparison?", owner);
+  assert.equal(statusId, expectedStatusId);
+  let checkpoint;
+  await until(async () => { checkpoint = (await barrier("snapshot")).checkpoint; return checkpoint.phase === "held"; }, "only the exact status adoption-checkpoint rename is held");
+  assert.ok(!log.includes(`acked chat=${home.uid} message=${statusId} stage=adoption`));
+  assert.deepEqual(await lane("snapshot"), hold, "the adopted status has not entered the native model lane");
+  const { n: readAnchor } = await import("/app/dist/session-accessor.sqlite-transcript-anchor-B0dOIy5w.mjs");
+  const sessions: any = await rpc("sessions.list", { limit: 50 });
+  const session = sessions.sessions.find((value: any) => value.key === context.sessionKey); assert.ok(session?.sessionId);
+  const target = { agentId: "main", sessionKey: context.sessionKey, sessionId: session.sessionId, storePath: join(root, "agents/main/sessions/sessions.json") };
+  let adopted: any, beforeAnchor: any;
+  await until(async () => {
+    const transcript: any = await rpc("sessions.get", { key: context.sessionKey, limit: 200 });
+    adopted = transcript.messages.find((value: any) => value.role === "user" && value.__openclaw?.transport?.messageId === statusId);
+    beforeAnchor = adopted?.__openclaw?.id ? readAnchor({ ...target, entryId: adopted.__openclaw.id }) : undefined;
+    return !!beforeAnchor;
+  }, "adopted foreground input has a native durable active anchor");
+  raceOutcomes.push({ phase: "human durably adopted; local checkpoint completion delayed", intervention: "test-only exact checkpoint path and UID rename barrier; no HTTP ACK, admission change or queue reordering", raceStartId, statusId, child: raceChild, hold, checkpoint, adopted, beforeAnchor });
+  assert.ok(releaseRaceWorker); releaseRaceWorker(); releaseRaceWorker = undefined;
+  let settleQueued = hold;
+  await until(async () => { settleQueued = await lane("snapshot"); return settleQueued.queuedCount === 1; }, "completed worker settlement queues after durable human adoption");
+  const { a: controlledRuns } = await import("/app/dist/subagent-registry.store.sqlite-DcyWJbiA.mjs");
+  const queuedRun = controlledRuns(context.sessionKey).find((value: any) => value.runId === raceChild?.runId);
+  assert.equal(queuedRun?.requesterSessionKey, context.sessionKey);
+  assert.equal(queuedRun?.requesterAgentId, context.agentId);
+  assert.equal(queuedRun?.requesterSettleWake?.status, "dispatching");
+  raceOutcomes.push({ phase: "settlement queued before foreground model", settleQueued, queuedRun });
+  const raceBefore = outbound.length, errorBefore = log.lastIndexOf("Session transcript anchor was not returned");
+  await lane("release");
+  await until(async () => {
+    const state = await lane("snapshot");
+    return state.activeCount === 0 && state.queuedCount === 0 && outbound.slice(raceBefore).some(value => value.body.startsWith("Race worker recommendation:"));
+  }, "native requester settlement completes while the foreground checkpoint remains held");
+  assert.equal((await barrier("snapshot")).checkpoint.phase, "held");
+  assert.ok(!log.includes(`completed chat=${home.uid} message=${statusId}`));
+  const afterSettle: any = await rpc("sessions.get", { key: context.sessionKey, limit: 200 });
+  const stillQueued = afterSettle.messages.find((value: any) => value.__openclaw?.id === adopted.__openclaw.id);
+  assert.deepEqual(stillQueued, adopted, "settlement preserves the independently admitted human event");
+  assert.deepEqual(readAnchor({ ...target, entryId: adopted.__openclaw.id }), beforeAnchor);
+  assert.ok(afterSettle.messages.filter((value: any) => value.role === "user" && value.__openclaw?.id !== adopted.__openclaw.id).every((value: any) => !JSON.stringify(value.content).includes("WORKER_RACE_STATUS")), "the internal settlement transcript prompt excludes the queued question");
+  const settledRun = controlledRuns(context.sessionKey).find((value: any) => value.runId === raceChild?.runId);
+  assert.ok(!settledRun?.requesterSettleWake, "native settlement custody is terminal before foreground release");
+  raceOutcomes.push({ phase: "settlement terminal; foreground checkpoint still held", stillQueued, settledRun, afterSettle, checkpoint: (await barrier("snapshot")).checkpoint });
+  await barrier("checkpoint-release");
+  await until(() => log.includes(`acked chat=${home.uid} message=${statusId} stage=adoption`), "original local checkpoint rename completes for the exact adopted status");
+  await until(() => log.includes(`completed chat=${home.uid} message=${statusId}`), "adopted status turn succeeds after native requester settlement");
+  assert.equal(log.lastIndexOf("Session transcript anchor was not returned"), errorBefore);
+  assert.deepEqual(outbound.slice(raceBefore).filter(value => value.body.startsWith("Race ")).map(value => ({ chat: value.chat, body: value.body })), [
+    { chat: home.uid, body: "Race worker recommendation: Thursday at 7 costs $20, which is $5 cheaper than Friday at 6." },
+    { chat: home.uid, body: "Race status: the comparison is complete. Thursday at 7 is $20; Friday at 6 is $25, so Thursday is $5 cheaper." },
+  ]);
+  assert.ok(!outbound.slice(raceBefore).some(value => value.body.includes("Agent run failed")));
+  const afterStatus: any = await rpc("sessions.get", { key: context.sessionKey, limit: 200 });
+  const retained = afterStatus.messages.find((value: any) => value.__openclaw?.id === adopted.__openclaw.id);
+  assert.deepEqual(retained, adopted, "the foreground human event and producer metadata remain immutable");
+  const afterAnchor = readAnchor({ ...target, entryId: adopted.__openclaw.id }); assert.deepEqual(afterAnchor, beforeAnchor);
+  const settledTasks: any = await rpc("tasks.list", { sessionKey: context.sessionKey, limit: 100 });
+  raceOutcomes.push({ phase: "foreground terminal; native public task projection", retained, afterAnchor, afterStatus, settledTasks });
+  const settledChild = settledTasks.tasks.find((value: any) => value.runtime === "subagent" && value.sourceId === raceChild?.runId);
+  // Public tasks.list projects native registry "succeeded" as "completed".
+  assert.equal(settledChild?.status, "completed");
+  assert.equal(settledTasks.tasks.filter((value: any) => value.runtime === "subagent" && value.title === "fixture-race-worker").length, 1, "the native registry has exactly one launch for this request");
+  const settleRequests = modelRequests.filter(value => {
+    const latest = JSON.stringify(value.messages.findLast((message: any) => message.role === "user" && !JSON.stringify(message.content).includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"))?.content ?? "");
+    return latest.includes("[Subagent Context]") && latest.includes("RACE_WORKER_RESULT");
+  });
+  assert.ok(settleRequests.length > 0);
+  assert.ok(settleRequests.every(value => !JSON.stringify(value.messages).includes("WORKER_RACE_STATUS")), "internal settlement must not consume the separately queued human prompt");
+  assert.equal([...callsIssued].filter(value => value === "fixture-race-start").length, 1);
+  raceOutcomes.push({ phase: "after settlement and foreground", retained, afterAnchor, settledChild, outbound: outbound.slice(raceBefore), settleRequests });
+  record("adopted foreground and worker settlement race", "a test-only delay of the exact local adoption-checkpoint rename lets native settlement finish before the foreground model runs; the immutable human anchor and separate prompts survive, one native child settles, and useful result and status each deliver once without a model-error fallback");
+  // The native readers above cache handles in this parent process. Release only
+  // this fixture's state before its later backup/restore and gateway restarts.
+  await closeParentDatabases(root);
   await message(home.uid, "CREATE_REMINDER_ACCEPTANCE: remind me to check the dinner plan in an hour", owner);
   let created: any;
   await until(async () => {
@@ -508,10 +633,13 @@ try {
   }
 } finally {
   const output = process.env.PLOW_ACCEPTANCE_OUTPUT;
-  if (output) await writeFile(output, JSON.stringify({ kind: "real pinned gateway with local Plow/model fixtures; no external messages", completed, evidence, outbound, safetyOutcomes, modelRequests: modelRequests.map(value => ({ model: value.model, image: JSON.stringify(value.messages).includes("image_url"), messages: value.messages })), logTail: log.slice(-12_000) }, null, 2) + "\n");
+  if (output) await writeFile(output, JSON.stringify({ kind: "real pinned gateway with local Plow/model fixtures; no external messages", completed, evidence, outbound, safetyOutcomes, raceOutcomes, modelRequests: modelRequests.map(value => ({ model: value.model, image: JSON.stringify(value.messages).includes("image_url"), messages: value.messages })), logTail: log.slice(-12_000) }, null, 2) + "\n");
   releaseReminder?.();
   releaseWorker?.();
+  releaseRaceWorker?.();
+  if (child?.connected) { await barrier("checkpoint-release").catch(() => {}); await lane("release").catch(() => {}); }
   await stop();
+  await closeParentDatabases(root);
   for (const socket of ws.clients) socket.terminate();
   await new Promise<void>(resolve => ws.close(() => resolve()));
   server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));

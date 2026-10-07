@@ -69,6 +69,129 @@ const patches = [
       after: "\t\t\tpayloads: [deliveryPayload],\n",
     }],
   },
+  // Code Mode runs in a sandbox route, but collectors belong to the admitted
+  // native session. Carry that host identity without widening collector access
+  // or changing the persisted swarm group/fingerprint used for replay.
+  {
+    path: "/app/dist/builtin-openclaw-q1hiFm14.mjs",
+    checksum: "e4504516aef56cd293e11369e420148c5ad60c80e60128ed64bfb57fb7239e25",
+    changes: [{
+      before: 'import { a as validateSessionTranscriptContextVersion } from "./session-accessor.sqlite-model-context-Dxi3aFzy.mjs";',
+      after: 'import { a as validateSessionTranscriptContextVersion, r as validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context-Dxi3aFzy.mjs";\nimport { l as readPendingUserTurnTranscriptAdmission } from "./session-transcript-read-fence-Crjo4FKU.mjs";',
+    }, {
+      before: "function resolveOrphanRepairPlan(params) {",
+      after: `function isCanonicalPlowHumanTurn(message) {
+\tconst sender = message?.__openclaw?.senderIdentity;
+\tconst transport = message?.__openclaw?.transport;
+\treturn message?.role === "user" && message.display !== false
+\t\t&& (!message.provenance || message.provenance.kind === "external_user")
+\t\t&& typeof message.idempotencyKey === "string"
+\t\t&& message.idempotencyKey.startsWith("channel-user:v1:")
+\t\t&& message.idempotencyKey.slice("channel-user:v1:".length).trim().length > 0
+\t\t&& transport?.channel === "plow" && typeof transport.messageId === "string" && transport.messageId.trim().length > 0
+\t\t&& sender?.type === "observation" && sender.pluginId === "plow" && sender.senderKind === "human"
+\t\t&& typeof sender.id === "string" && sender.id.trim().length > 0 && sender.id === message.__openclaw.senderId;
+}
+function resolveOrphanRepairPlan(params) {`,
+    }, {
+      before: "\tconst toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({\n\t\tconfig: attempt.config,\n\t\tagentId: params.setup.sessionAgentId,\n\t\tsessionKey: params.setup.sandboxSessionKey,\n",
+      after: "\tconst toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({\n\t\tconfig: attempt.config,\n\t\tagentId: params.setup.sessionAgentId,\n\t\tsessionKey: params.setup.sandboxSessionKey,\n\t\trunSessionKey: attempt.sessionKey?.trim() || attempt.sessionId,\n",
+    }, {
+      // A queued, already-admitted human turn owns this canonical leaf. An
+      // internal worker settlement must not detach its durable read anchor.
+      before: "\treturn {\n\t\tcontextEnginePrompt: merge.prompt,\n\t\tmessageEntry: candidate.messageEntry,\n\t\ttrailingEntries: candidate.trailingEntries,\n\t\tremoveLeaf: merge.removeLeaf || !params.preserveLeaf\n\t};",
+      after: "\tconst canonicalPlowHuman = isCanonicalPlowHumanTurn(candidate.messageEntry.message);\n\tconst preserveQueuedHuman = canonicalPlowHuman && !params.preserveLeaf && !merge.removeLeaf;\n\treturn {\n\t\tcontextEnginePrompt: preserveQueuedHuman ? params.prompt : merge.prompt,\n\t\tmessageEntry: candidate.messageEntry,\n\t\ttrailingEntries: candidate.trailingEntries,\n\t\tpreserveQueuedHuman,\n\t\tremoveLeaf: merge.removeLeaf || !(params.preserveLeaf || canonicalPlowHuman)\n\t};",
+    }, {
+      // Only this factory-owned input may select its existing local branch
+      // after another actor settles. Durable history and replay guards remain.
+      before: "\tconst readCurrentTurn = async (signal) => {\n\t\tsignal?.throwIfAborted();",
+      after: "\tlet replayAppendTail, replayWitness;\n\tconst readCurrentTurn = async (signal) => {\n\t\tsignal?.throwIfAborted();",
+    }, {
+      before: "\t\tawait sessionManager.reloadPersistedTranscriptAsync(signal);\n\t\tassertOwned();\n\t\treturn await sessionManager[sessionManagerPrepareCurrentTurnReplay]((entry) => isInterruptedTurnEntry(entry, runId), (entry) => entry?.type === \"message\" && entry.message.role === \"user\" && isDeepStrictEqual(entry.message, message), signal);",
+      after: `\t\tawait sessionManager.reloadPersistedTranscriptAsync(signal);
+\t\tassertOwned();
+\t\tconst admission = readPendingUserTurnTranscriptAdmission(recorder);
+\t\tconst pendingPlowSource = admission && isCanonicalPlowHumanTurn(message) && isDeepStrictEqual(recorder.getPersistedMessage?.(), message);
+\t\tif (pendingPlowSource) {
+\t\t\tvalidateSessionTranscriptContextAdmission(scope, admission);
+\t\t\tassertOwned();
+\t\t\treplayAppendTail = sessionManager.getAppendParentId();
+\t\t\tsessionManager.reloadPersistedTranscriptAfterAppend(sessionManager.transcriptMutationAt, admission.entryId, admission.entryId);
+\t\t\tassertOwned();
+\t\t\tvalidateSessionTranscriptContextAdmission(scope, admission);
+\t\t\tconst selected = sessionManager.getEntry(admission.entryId);
+\t\t\tif (selected?.type !== "message" || !isDeepStrictEqual(selected.message, message)) throw new Error("Pending Plow user turn changed before replay admission");
+\t\t}
+\t\tconst witness = await sessionManager[sessionManagerPrepareCurrentTurnReplay]((entry) => isInterruptedTurnEntry(entry, runId), (entry) => entry?.type === "message" && entry.message.role === "user" && isDeepStrictEqual(entry.message, message), signal);
+\t\treplayWitness = pendingPlowSource ? witness : void 0;
+\t\treturn witness;`,
+    }, {
+      before: "\tlet pending = true;\n\treturn async (signal = params.signal) => {\n\t\tif (!pending) return;\n\t\tconst replaySignal = signal && params.signal && signal !== params.signal ? AbortSignal.any([signal, params.signal]) : signal;\n\t\tconst current = await readCurrentTurn(replaySignal);\n\t\tif (!current || current.anchor.entryId !== initial.anchor.entryId || current.anchor.generation !== initial.anchor.generation) throw new Error(\"Persisted user turn changed before replay admission\");\n\t\treturn () => {\n\t\t\tif (!pending) return;\n\t\t\tassertPreparedCurrentTurn(current, replaySignal);\n\t\t\tpending = false;\n\t\t};\n\t};",
+      after: `\tlet pending = true;
+\tconst prepareReplay = async (signal = params.signal) => {
+\t\tif (!pending) return;
+\t\tconst replaySignal = signal && params.signal && signal !== params.signal ? AbortSignal.any([signal, params.signal]) : signal;
+\t\tconst current = await readCurrentTurn(replaySignal);
+\t\tif (!current || current.anchor.entryId !== initial.anchor.entryId || current.anchor.generation !== initial.anchor.generation) throw new Error("Persisted user turn changed before replay admission");
+\t\treturn () => {
+\t\t\tif (!pending) return;
+\t\t\tassertPreparedCurrentTurn(current, replaySignal);
+\t\t\tpending = false;
+\t\t};
+\t};
+\tprepareReplay.restoreAppendTail = (persistedMessage) => {
+\t\tconst admission = readPendingUserTurnTranscriptAdmission(recorder);
+\t\tif (!admission || !replayWitness || !isCanonicalPlowHumanTurn(message) || !isDeepStrictEqual(persistedMessage, message)) return;
+\t\tif (!replayAppendTail || admission.entryId !== replayWitness.anchor.entryId || admission.generation !== replayWitness.anchor.generation) throw new Error("Pending Plow append custody changed");
+\t\tassertPreparedCurrentTurn(replayWitness, params.signal);
+\t\tvalidateSessionTranscriptContextAdmission(scope, admission);
+\t\tsessionManager.reloadPersistedTranscriptAfterAppend(replayWitness.version.updatedAt, replayAppendTail, admission.entryId);
+\t\tassertOwned();
+\t\tvalidateSessionTranscriptContextAdmission(scope, admission);
+\t};
+\treturn prepareReplay;`,
+    }, {
+      // Restore append custody synchronously. The existing persisted-message
+      // callback is async and cannot propagate validation errors to append.
+      before: "\tconst sessionManager = guardSessionManager(unguardedSessionManager, {",
+      after: `\tif (prepareInitialUserTurnReplay?.restoreAppendTail) {
+\t\tconst append = unguardedSessionManager.appendMessageWithTranscriptAnchor.bind(unguardedSessionManager);
+\t\tunguardedSessionManager.appendMessageWithTranscriptAnchor = (message, options) => {
+\t\t\tconst result = append(message, options);
+\t\t\tif (result.appended === false) prepareInitialUserTurnReplay.restoreAppendTail(result.message);
+\t\t\treturn result;
+\t\t};
+\t}
+\tconst sessionManager = guardSessionManager(unguardedSessionManager, {`,
+    }, {
+      // Prompt hooks run after planning; keep the same queued-input boundary
+      // when the native runtime assembles model and transcript prompts.
+      before: "\tif (leafEntry && input.orphanRepair) {\n\t\tconst orphanPromptMerge = mergeOrphanedTrailingUserPrompt({",
+      after: "\tif (leafEntry && input.orphanRepair && !input.orphanRepair.preserveQueuedHuman) {\n\t\tconst orphanPromptMerge = mergeOrphanedTrailingUserPrompt({",
+    }],
+  },
+  {
+    path: "/app/dist/tool-surface-bridge-CuOL1qP8.mjs",
+    checksum: "1658ee259104fb8dc2005a0bf8a863339cf645a21f9e84a0db4c60543d6655c0",
+    changes: [{
+      before: "\t\t\t\tsessionKey: params.sessionKey,\n\t\t\t\tsessionId: params.sessionId,\n\t\t\t\trunId: params.runId,\n\t\t\t\tcatalogRef: toolSearchCatalogRef,\n",
+      after: "\t\t\t\tsessionKey: params.sessionKey,\n\t\t\t\trunSessionKey: params.runSessionKey,\n\t\t\t\tsessionId: params.sessionId,\n\t\t\t\trunId: params.runId,\n\t\t\t\tcatalogRef: toolSearchCatalogRef,\n",
+    }],
+  },
+  {
+    path: "/app/dist/code-mode-swarm.runtime-Cre1Hth5.mjs",
+    checksum: "13f57de42c08988228521ef30dac0a8280378f475555a49ba5e1a6e95a2fc216",
+    changes: [{
+      before: "function resolveCodeModeSwarmGroupId(ctx) {",
+      after: "function resolveCodeModeRunSessionKey(ctx) {\n\treturn resolveCodeModeRequesterSessionKey({ ...ctx, sessionKey: ctx.runSessionKey ?? ctx.sessionKey });\n}\nfunction resolveCodeModeSwarmGroupId(ctx) {",
+    }, {
+      before: "\tconst requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);\n\tlet existing = getSwarmRunByLaunchReplayKey",
+      after: "\tconst requesterSessionKey = resolveCodeModeRunSessionKey(params.ctx);\n\tlet existing = getSwarmRunByLaunchReplayKey",
+    }, {
+      before: "\t\tcurrentSessionKeys: /* @__PURE__ */ new Set([rawSessionKey, requesterSessionKey]),",
+      after: "\t\tcurrentSessionKeys: /* @__PURE__ */ new Set([rawSessionKey, requesterSessionKey, resolveCodeModeRunSessionKey(params.ctx)]),",
+    }],
+  },
 ];
 for (const { path, checksum, changes } of patches) {
   const source = await readFile(path, "utf8");

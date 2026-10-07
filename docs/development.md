@@ -110,7 +110,7 @@ history older than `plow-listening-since` stays unanswered.
 
 ## Experience acceptance
 
-The build applies `patch-runtime.ts` to six checksum-verified 2026.9.6 modules.
+The build applies `patch-runtime.ts` to nine checksum-verified 2026.9.6 modules.
 The outbound patch retains the durable intent ID in Plow adapter context even when exact
 provider reconciliation is not required. This lets the adapter distinguish cron
 delivery from inbound replies for pause enforcement. It does not enable provider
@@ -168,6 +168,59 @@ late pauses, malformed provenance, original completion settlement and replaced
 writer authority. Stable queue custody preserves pending
 recovery; it does not establish indefinite duplicate suppression after acknowledgement.
 
+The three collector-context patches carry the admitted native `runSessionKey`
+from the harness through the Code Mode tool surface. The owner's phone route
+can have a sandbox key such as `agent:main:plow:chat:direct:plow-owner` while
+its bound native session is `agent:main:main`. Collector ownership and replay
+lookup must use the admitted session; otherwise a successfully accepted child
+can produce a false `not_owner` error when collecting its result. Native
+collector session and agent checks remain in force. Swarm group IDs and request
+fingerprints keep their original values so an existing accepted launch can be
+reconciled after upgrade without another spawn. Never infer this identity from
+a child ID, an owner-shaped string or user-supplied conversation facts.
+
+The same harness module preserves an already-admitted Plow human transcript
+leaf when an internal worker settlement runs ahead of that person's queued
+turn. Ordinary orphan repair would replace the leaf with a merged prompt and
+detach the immutable anchor the waiting turn needs. Retention requires native
+channel-user idempotency, a Plow transport message ID and matching verified
+human sender observation. Quoted text and internal/synthetic messages cannot
+supply those fields. Empty or stale internal leaves retain native cleanup.
+The event ID, sender/transport metadata, read fence and pending-final completion
+remain unchanged; this does not grant authority or make adoption a completion.
+The queued human's question also stays out of the settlement's model and
+transcript prompts, including the later merge after prompt hooks. Its own
+foreground admission supplies that question under its original sender and
+transport context. Explicit native `preserveLeaf` restart recovery retains its
+existing merge behavior; recognizing a canonical queued input is a separate
+planner decision. The deterministic queue barrier and SQLite tests cover both
+prompt assembly sites, the original anchor and negative metadata controls.
+
+Keeping that anchor is only the first half of recovery. An internal settlement
+can append a later user turn before the foreground question reaches its model.
+Replay preparation therefore reselects the already-committed human source in
+the local native session view, using the existing
+`reloadPersistedTranscriptAfterAppend` operation. The factory-owned recorder
+must still have a pending admission: blocked inputs and inputs already sent to
+the provider cannot use this path. Each reload validates the exact native
+receipt, writer custody and immutable message before the unchanged current-turn
+witness and version checks run. The durable event, branch and sender remain
+unchanged; an ordinary attempt to append a historical keyed user is still
+rejected. After the source is re-adopted without another append, the same native
+operation restores the captured actual append tail. Subsequent assistant output
+keeps both the queued source and the internal settlement in durable history;
+the original model read admission still excludes later turns from its context.
+This restoration runs in a synchronous append wrapper so a failed custody or
+version check prevents submission instead of becoming an ignored async callback.
+The checkpoint race must prove the question's own final response,
+in addition to a successfully delivered worker recommendation.
+
+The native closed-turn/`afterTurn` projection still includes intervening durable
+settlement events with `inter_session` provenance. The exclusion above applies
+to the original human model's read admission. A custom consumer of closed-turn
+history must inspect provenance and the original logical turn/source identity;
+it must not assume that every projected event was written by the human caller.
+
 Scheduled turns also reject direct Plow message sends at the tool boundary.
 Their final text goes through the scheduler's configured delivery route, where
 the pause gate and durable queue apply. The denial explains this path so a
@@ -191,7 +244,7 @@ custom selector. Native resolver tests and the gateway's no-raw-worker assertion
 cover the default enrollment. This is separate from requested worker completion
 and does not disable the main agent's heartbeat.
 
-For every runtime upgrade, review these six source modules against the new
+For every runtime upgrade, review these nine source modules against the new
 upstream implementation. Checksums and unique replacement targets fail the
 build on drift; updating only a filename or hash is insufficient. Run the suite,
 offline probe and native gateway acceptance before changing the pin. A fixture
