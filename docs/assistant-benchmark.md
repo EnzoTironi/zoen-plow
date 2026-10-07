@@ -137,6 +137,28 @@ unchanged results and consequential actions. Validate useful low-risk work and
 restraint separately; neither constant activity nor permanent inactivity proves
 good judgment. See [proactive restraint](https://assistantbenchmark.com/dimensions/proactive_restraint).
 
+### Calendar and media counterexamples
+
+Compare full dates before clock times. Thursday at 19:00 precedes Friday at
+18:00 by 23 hours even though Friday's time of day is one hour earlier. A task
+recommendation should distinguish those meanings, state relevant price
+trade-offs and preserve the supplied timezone. The regression matrix also
+includes a 45-minute Sunday-to-Monday midnight rollover. Neither example grants
+permission to schedule or book anything.
+
+Separate a verified size violation from an unavailable or undecodable image.
+The intake distinguishes the server's declared size from bytes actually received.
+If a declared size exceeds the configured attachment budget (50 MiB by default),
+the download is skipped; its actual size was
+not measured. If received bytes cross the limit, the stream is stopped. Ordinary
+errors with the same message are not size evidence. Check that rejected streams
+are cancelled and never reach image storage.
+A failed download does not prove that the image exceeded the limit. Inspect the
+current attachment's actual intake result, offer useful text or a supported
+still image and do not reuse an earlier image's contents. For a vision test,
+use a new chart whose values never appeared in that conversation; repeated
+known values alone cannot establish that the model read the pixels.
+
 ## 4. Improve one candidate without rewriting history
 
 1. Freeze cases, expected behaviors, model settings and baseline outputs. Reserve

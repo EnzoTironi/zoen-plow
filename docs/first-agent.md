@@ -13,8 +13,8 @@ These steps create a local install; publication comes after acceptance.
 Clone this repository and open its root:
 
 ```sh
-git clone https://github.com/plow-pbc/plow-openclaw-agent.git
-cd plow-openclaw-agent
+git clone https://github.com/plow-pbc/plow-openclaw-agent.git plow-tutor-workshop
+cd plow-tutor-workshop
 docker build -t plow-openclaw:workshop .
 ```
 
@@ -77,6 +77,10 @@ The CLI writes `plow-credentials` in the repository root. Compose reads that fil
 It contains a credential. Keep it out of Git, screenshots, evaluation outputs,
 and Docker build contexts.
 
+Use the separate checkout from step 1 for this test line. Minting in a checkout
+that already runs another install replaces the credential file that install
+will read on its next restart.
+
 ## 5. Run the variant through the existing local proxy
 
 Create `work/my-tutor/compose.override.yml` with:
@@ -90,17 +94,18 @@ services:
 Run the repository's Compose configuration with this override:
 
 ```sh
+export COMPOSE_PROJECT_NAME=tutor-workshop PLOW_DEV_PORT=3017
 docker compose -f compose.yml -f work/my-tutor/compose.override.yml up -d --no-build
 docker compose -f compose.yml -f work/my-tutor/compose.override.yml ps
 ```
 
 `--no-build` uses the variant you just built. Without this flag, a Compose build
-can rebuild the inherited root build context instead. The existing proxy stays on
-loopback port 3001, and the existing named volume retains state.
-
-If this checkout already has an install, use a fresh Compose project name with
-`-p tutor-workshop` on every Compose command. A project name selects a separate
-named volume. Use a test credential for that project.
+can rebuild the inherited root build context instead. `COMPOSE_PROJECT_NAME`
+selects a separate named volume; `PLOW_DEV_PORT` gives its proxy a separate
+loopback port. Both are needed when another local install is running. Use an
+available port; if you choose a different one, use it in the browser URLs below.
+Keep these variables set for every Compose command, including logs, restart and
+shutdown. They use the same [isolation pattern as the README](../README.md).
 
 Wait for the agent's health status to become healthy. Inspect startup failures
 with `docker compose -f compose.yml -f work/my-tutor/compose.override.yml logs agent`.
@@ -125,7 +130,7 @@ unhelpful answer for the [dialogue review](builder-sops.md#sop-4-verify-the-expe
 
 ## 7. Inspect and save personality
 
-Open <http://localhost:3001/plugins/plow/personality>. Move one slider and inspect
+Open <http://localhost:3017/plugins/plow/personality>. Move one slider and inspect
 the preview. Preview must not save the change. Select **Save**, reload the page,
 and confirm the position persists. Select **Reset** to return to the tutor's
 builder defaults.

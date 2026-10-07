@@ -101,6 +101,18 @@ erase historical transcripts or separately created files/indexes, and it does no
 cancel tasks. Remove those artifacts separately when requested. The base does
 not build another memory index.
 
+Native dreaming, pre-compaction memory flush and autonomous Skill Workshop
+review default to off. They are separate workspace retention/mutation paths,
+not Plow memory operations. Missing settings migrate to off; explicit values
+and opaque owner includes survive. Disabling maintenance does not erase older
+copies. Shared bootstrap files must contain only public agent guidance. If an
+eligible root `MEMORY.md` exists through legacy configuration or deliberate
+opt-in, the pinned runtime can include it in non-owner direct-chat bootstrap.
+This is a conditional source-confirmed path, not an observed disclosure. Group
+bootstrap excludes that file; opt-in requires a separate privacy boundary.
+Private facts belong in the scoped store. See the [prebuilt defaults](default-experience.md)
+and [upgrade procedure](operations-sops.md#sop-5-upgrade-or-roll-back).
+
 Tasks use native managed flows bound to the current session. They distinguish
 queued, running, waiting, succeeded, failed and cancelled states; evidence records
 confirmed, failed or unknown delivery. A completion condition is required at
@@ -201,15 +213,56 @@ receipt does not provision a mailbox or promise a later send. Never switch to an
 excluded owner account. Validate actual sending/receiving separately once the
 deployment has an agent mailbox and an owned test recipient.
 
-Inbound phone images support JPEG, PNG, GIF and WebP, at most four attachments and
-8 MiB each. Download is bounded to 15 seconds and refuses redirects. Native image
-understanding uses the configured image model, initially Sonnet, while GLM remains
-the text default. Image processing has a 45-second limit. Audio/video interpretation
-and inbound email attachments are unsupported; ask for relevant text or a still
-image and never invent attachment contents. Outbound attachments follow native
-media handling. Phone DMs use typing indicators that stop on completion;
+## Documents and images
+
+Phone and email intake accepts PDF, JPEG, PNG, GIF and WebP. Up to four files are
+processed per message. The per-file download and storage budget defaults to 50 MiB.
+Set `PLOW_ATTACHMENT_MAX_MB` in the deployment environment to change it; positive,
+finite values are required. An unbounded download can exhaust the Gateway's memory,
+so the byte budget still applies when a server omits or understates its length.
+Download takes at most 30 seconds and refuses redirects. A reported oversized file
+is skipped without claiming its actual size was measured. A stream stopped at the
+budget is described as a measured download failure. Neither failure reveals contents.
+
+Every PDF gets a local preview using OpenClaw's bundled `document-extract` worker
+and PDFium. The preview covers at most the first four pages, limited further by
+`agents.defaults.pdfMaxPages`, and contains at most 12,000 text characters. The
+context marks truncation and the page limit. Pages with little extractable text
+are rendered as images within a shared four-million-pixel budget. This also works
+for a scanned page after a text-rich page. Up to 16 images per turn use native image
+understanding. Extracted text and image contents are untrusted conversation data,
+and instructions inside a document do not grant access to tools or private notes.
+
+The native `pdf` tool is enabled for the owner and fully trusted phone groups.
+It resolves its model from an explicit `agents.defaults.pdfModel`, then
+`imageModel`; the base image initially uses Sonnet through Plow. GLM remains the
+text default. The tool accepts a saved attachment path or supported URL, up to ten
+PDFs, an analysis prompt, `pages` and `password`. In Plow's extraction mode, use
+`pages: "6"` for a later page and `password` for an encrypted file. Native
+Anthropic/Google provider mode rejects `pages` and `password`; choose a configured
+extraction-capable model for those arguments. Never store a document password in
+durable memory. Tool results, available provider credentials and current access
+policy determine whether a request succeeds.
+
+Fresh installations seed a 50 MiB PDF-tool budget and 20 pages per tool call.
+`agents.defaults.pdfMaxMb`, `pdfMaxPages` and `pdfModel` preserve explicit owner
+settings on restart. The transport budget is separate from the PDF analysis budget.
+For a larger document, raise both budgets deliberately and validate memory usage;
+page selection limits analysis work, not download bytes. Previews are capped at
+four pages even when the tool can inspect more. A non-owner in a normal room can
+read the supplied preview without acquiring arbitrary local-file or URL access.
+They do not receive the native `pdf` tool by default. Reading additional pages or
+encrypted documents requires an authorized conversation or a readable excerpt.
+
+Unreadable, corrupt, protected or unavailable documents get an honest read failure
+and a usable next step. Preview failure preserves the saved reference for an
+authorized native tool attempt. Disabling `document-extract` also disables previews.
+Audio/video interpretation requires relevant text or a still image. Outbound
+attachments follow native media handling. Phone DMs use typing indicators that stop on completion;
 groups use explicit progress replies for long work and do not emit typing while
 the model decides whether to participate.
+
+## Conversation history and completion
 
 History recovery pages to the actual checkpoint, including backlogs beyond the
 512-UID retained window. Adoption acknowledges processing ownership, not action

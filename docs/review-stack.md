@@ -1,6 +1,7 @@
 # Review the base experience stack
 
-The 21 upstream PRs are consolidated into 11 review layers in
+The 21 upstream PRs are consolidated into layers 1–11, followed by six
+Luna-validation and runtime-correction layers, in
 [EnzoTironi/zoen-plow](https://github.com/EnzoTironi/zoen-plow).
 Each PR has one commit and uses the previous review branch as its base.
 GitHub therefore shows that layer's own changes by default.
@@ -27,12 +28,29 @@ No PR in this stack targets the fork's `main`.
 | 9 | [Dialogue evaluator](https://github.com/EnzoTironi/zoen-plow/pull/9) | `eval/run.ts`, `eval/assertions.ts`, `tests/eval-runner.test.ts` | Strict repeat controls, checkpointed outputs, HTTP 402 and unrun accounting |
 | 10 | [Experience scenarios](https://github.com/EnzoTironi/zoen-plow/pull/10) | `eval/README.md`, `eval/experience-cases.json` | English decisions, human criteria, canonical mappings and paid workflow |
 | 11 | [Builder experience](https://github.com/EnzoTironi/zoen-plow/pull/11) | `docs/README.md`, `prompt/BASE.md`, `prompt/AGENTS.md` | Tutorial, SOPs, starters, default guidance and measured wording candidate |
+| 12 | [Scheduled runtime](https://github.com/EnzoTironi/zoen-plow/pull/12) | `patch-runtime.ts`, `plugin/index.ts`, `boot/config.ts` | Creator scope through pause/resume, durable safety notices, scheduled tool guidance, main-only default heartbeat enrollment and explicit opt-in for native memory/skill maintenance |
+| 13 | [Session recovery](https://github.com/EnzoTironi/zoen-plow/pull/13) | `patch-runtime.ts`, `tests/foreground-custody.test.ts`, `tests/gateway-acceptance.ts` | Canonical native collector ownership, immutable queued human admission, separate settlement prompts and synchronous append-tail restoration |
+| 14 | [Luna evaluator](https://github.com/EnzoTironi/zoen-plow/pull/14) | `eval/run-codex.ts`, `eval/scenarios.ts`, `tests/codex-eval.test.ts` | Protected copied OAuth login, strict paid-run controls, source hashes and preserved transport failures |
+| 15 | [Experience hillclimb](https://github.com/EnzoTironi/zoen-plow/pull/15) | `plugin/experience.ts`, `prompt/BASE.md`, `prompt/WORKER.md`, `plugin/index.ts`, `eval/benchmark-cases.json` | Conversation-default memory, fresh consent after notification resume, grounded dates and replies, verified media diagnostics, unsaved-preview labels, recipient-array guidance, English outcome scenarios and public benchmark adaptation without competitive ranking claims |
+| 16 | [PDFs and larger attachments](https://github.com/EnzoTironi/zoen-plow/pull/16) | `boot/media.ts`, `plugin/documents.ts`, `plugin/index.ts`, `tests/attachments.test.ts` | Shared phone/email file intake, configurable 50 MiB default, native bounded previews and authorized PDF tool, scan/password/page selection, policy preservation and truthful partial failures |
+| 17 | [Validation SOPs and evidence](https://github.com/EnzoTironi/zoen-plow/pull/17) | `docs/luna-validation.md`, `docs/validation/luna-2026-10-07.md` | Isolated installation procedure, complete recorded dialogues, AI decisions, native effect evidence and unresolved acceptance gates |
 
 Layers 1 and 3 are separate because builder configuration migration depends on
 the conversation and delivery contracts in layer 2. The evaluator and its
 canonical duplicate-risk fixture land together in layer 9. Layer 10 adds the
 remaining scenario matrix. Layer 11 collects teaching material and default
 prompt guidance after the runtime contracts it explains.
+
+Layers 12 and 13 separate scheduler/delivery authority from native session
+ownership and transcript recovery. Both include their permanent regression
+fixtures. Layer 14 supplies the protected diagnostic runner before layer 15
+changes scoped tool contracts and shared guidance, then adds benchmark journeys. Layer 16 adds shared document intake and the native PDF tool. Layer 17 records the
+procedure and evidence after the implementation it explains. Its JSONL files
+are synthetic experiment data: start with the dated narrative and join records
+by case/run IDs when checking an individual counterexample.
+GitHub collapses the generated JSONL diffs by default through `.gitattributes`.
+The dated narrative, source headers and linked raw ledgers remain available;
+expand the data file when reviewing an individual response or receipt.
 
 ## Review each layer
 
@@ -62,21 +80,25 @@ Before updating this review guide and the readiness links, the consolidated
 aggregate at `c788dbe1affa9cf20fa6989dc269dcc142956f11` had the exact Git tree of
 `6e8314ff2b0f1b0621fce166bff9612922cf1297`. Both tree IDs were
 `ba3050ee63986180621d3bb8ef038dab5cf575dc`.
-The final consolidation changes only `docs/review-stack.md` and
-`docs/readiness.md` beyond that source. Runtime, prompts, tests, scenario inputs
-and failure evidence retain their content.
+The original 11-layer consolidation changed only `docs/review-stack.md` and
+`docs/readiness.md` beyond that source. Layers 12–17 are subsequent work; they
+do not rewrite the first 11 heads. The dated validation record binds new
+model and native evidence to their actual source/image and fixture hashes.
 
 Historical CI for the original final source passed the type check, 402 runtime
 tests, offline probe, proxy origin/restart checks and 18 native gateway checks.
 This fork reruns CI for every new layer. Use the PR's current checks for that
 layer, rather than transferring the historical count to an earlier boundary.
-Paid model evaluation is opt-in and was not executed during consolidation.
+Paid model evaluation is opt-in and was not executed during the original
+consolidation. The later authorized Luna hillclimb is recorded separately in
+[the October 7 validation record](validation/luna-2026-10-07.md).
 
-Every PR has images and a video uploaded with GH `--attach`. Their captions name
+Every PR must include images and a video uploaded with GH `--attach` before
+review. Verify its actual attachments and current head. Their captions name
 the source and distinguish an actual localhost dashboard, an evidence review
 page and a fixture. A recording of retained model outputs is not a new live
-conversation. Preserve the six material AI findings and the failed provider
-calls when assessing quality.
+conversation. Preserve the historical material AI findings and failed provider
+calls alongside subsequent candidates; a newer result does not regrade them.
 
 The fork's `main` was initially observed at `a8e24176a0b5ce9299f57ae19471f048048073ac`
 and later at upstream `ddbaa6bc0f9e071d9411777b91590e755e367d84` during setup.
@@ -143,15 +165,18 @@ new head rather than treating an older approval as current.
 ## Open acceptance gates
 
 The implementation and consolidation do not establish a finished base release.
-The targeted comparison contains 48 real-model replies and six remaining
-material AI findings. Five of those findings passed the literal assertions.
-The broader run exhausted provider credits with HTTP 402 and produced no
-completions. Further paid requests need restored credits or an authorized
-alternative.
+The original default-provider comparison had 48 returned replies and six
+material AI findings; its broader HTTP 402 attempt returned no completions.
+Those historical results remain visible. The authorized Luna alternative now
+has a separate frozen matrix and native tool journeys with complete individual
+review records. Use their bounded observations rather than transferring the
+old count to the current candidate or assuming it applies to shipping models.
 
-Human qualitative review, corrected live conversations, provisioned-mailbox
-acceptance and a full restore with resumed live traffic remain open. The owned
-isolated installation proved CLI boot and an explicit Compose/dashboard restart,
-but it did not prove every channel journey. Keep those gates in the
-[validation SOP](experience-validation.md) and the
-[release SOP](builder-sops.md#sop-5-release-a-candidate) until the matching evidence exists.
+Human qualitative approval, provisioned external-mailbox acceptance, complete
+real-phone/group workflows, multi-day routines and default-provider acceptance
+remain open. A real Plow WebSocket and working dashboard prove service startup;
+local synthetic sends prove only the corresponding lab effects. Competitive
+parity needs a comparable protocol and accounts. Keep the matching gates in the
+[dated validation record](validation/luna-2026-10-07.md),
+[validation SOP](experience-validation.md) and
+[release SOP](builder-sops.md#sop-5-release-a-candidate).

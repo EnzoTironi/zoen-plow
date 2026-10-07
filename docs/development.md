@@ -3,6 +3,9 @@
 Builders can start with [the tutorial](first-agent.md) and
 [the workflow and release SOPs](builder-sops.md). This document contains the
 base's executable checks and pinned upstream contracts.
+For authorized subscription-model diagnostics, use the
+[isolated Luna validation SOP](luna-validation.md). It distinguishes dialogue
+checks, native tool effects and the real Plow installation path.
 
 The image pins the runtime and SDK. CI type-checks boot, plugin and build sources,
 runs all Node tests against that image, and boots the real offline gateway probe.

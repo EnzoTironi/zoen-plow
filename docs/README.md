@@ -13,6 +13,7 @@ Choose the document that matches your task:
 | Design and release an agent with a repeatable process | [Agent builder SOPs](builder-sops.md) |
 | Look up every manifest field and precedence rule | [Agent definition reference](agent-definition.md) |
 | Inspect owner and room control actions, scopes, and limits | [Owner control reference](owner-controls.md) |
+| Read PDFs and images, configure budgets, or troubleshoot an attachment | [Document handling SOP](document-handling.md) |
 | Add a skill or a native plugin tool | [Extend an agent](extension-sop.md) |
 | Deploy, inspect, back up, upgrade, or recover an install | [Agent operations SOPs](operations-sops.md) |
 | Understand controls, enforced boundaries, and SDK receipts | [Base experience contract](base-experience.md) |
@@ -21,6 +22,9 @@ Choose the document that matches your task:
 | Review or maintain the dependent PRs | [Review stack](review-stack.md) |
 | Judge dialogue outputs and model-dependent behavior | [Evaluation rubric](../eval/README.md#human-release-review) |
 | Validate responses and a real isolated installation | [Experience validation SOP](experience-validation.md) |
+| Run authorized Luna diagnostics with an isolated login and state | [Isolated Luna validation](luna-validation.md) |
+| Adapt public assistant benchmarks into observable agent journeys | [Assistant benchmark guide](assistant-benchmark.md) |
+| Inspect the recorded Luna hillclimb, individual decisions and unresolved limits | [October 7 validation record](validation/luna-2026-10-07.md) |
 
 The tutorial uses local images and an isolated test line. The release procedures
 use immutable public image digests. A successful build establishes neither

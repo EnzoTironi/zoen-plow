@@ -176,9 +176,26 @@ image still requires an upgrade rehearsal.
 
 **Outcome:** a reviewed upgrade or restoration of the complete prior install.
 
+This base defaults three native maintenance settings to off:
+
+| Configuration path | Default | Separate effect when enabled |
+| --- | --- | --- |
+| `plugins.entries.memory-core.config.dreaming.enabled` | `false` | Copies interactive transcripts into a workspace corpus and can promote memory |
+| `agents.defaults.compaction.memoryFlush.enabled` | `false` | Requests daily workspace memory writes before compaction |
+| `skills.workshop.autonomous.mode` | `off` | Permits autonomous agent-specific skill review and mutation |
+
+Boot fills missing values and preserves explicit values or opaque owner includes.
+It does not erase workspace files. Before upgrading an older install, inventory
+`workspace/MEMORY.md`, `workspace/memory/` and agent-specific Workshop skills in
+the stopped-state backup. Review any private content and migrate it into the
+intended Plow scope before removing a separate copy with authorization. Root
+`MEMORY.md` can enter a non-owner direct chat in this pinned runtime; group
+exclusion alone does not establish privacy. Keep private data out of all shared
+bootstrap files. An opt-in needs its own isolation and guest/room tests.
+
 1. Record the current image digest and create a complete stopped-state backup.
-2. Review base and runtime changes, configuration migrations, and the two
-   checksum-guarded runtime patches.
+2. Review base and runtime changes, configuration migrations, and the
+   checksum-guarded runtime modules.
 3. Build the variant against the new base digest.
 4. Run deterministic checks, the gateway probe, the acceptance harness, and domain cases.
 5. Rehearse restoration and migration on an isolated install.
@@ -219,3 +236,11 @@ Use `plow-agents --help` and the
 [CLI README](https://github.com/plow-pbc/plow-agents) for the installed version's
 agent-management commands. Deleting a task, removing a schedule, forgetting a note,
 stopping a container, and revoking a credential have different effects.
+
+## Operate document intake
+
+Follow the [document handling SOP](document-handling.md) for the shared phone and
+email path, configurable file budgets, native PDF tool settings, plugin opt-outs
+and partial-read diagnostics. Test scans, a page outside the preview, protected
+and corrupt documents, and a file above 8 MiB before publishing an agent that
+promises document reading. Use synthetic files and your own isolated recipients.

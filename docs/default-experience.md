@@ -63,6 +63,23 @@ delete them. Builders that deliberately use the owner notebook must now pass
 `scope=owner` explicitly. Forgetting a note affects its notebook, not historical
 messages or another notebook.
 
+The base disables native dreaming, automatic pre-compaction memory flush and
+autonomous Skill Workshop review by default. Dreaming can copy interactive
+transcripts into a workspace corpus; compaction flush can write daily memory
+files; Workshop review can change agent-specific skills. Those operations have
+different retention and authorization from scoped Plow notes. Ordinary native
+conversation history, compaction, user-requested reminders and reviewed image
+skills remain available.
+
+An existing explicit maintenance setting, including an owner-managed include,
+keeps its value. Missing settings receive the safer default on boot. Turning a
+setting off does not remove earlier workspace copies. In this pinned runtime,
+non-owner direct chats can load root `MEMORY.md`; never put private owner facts
+in shared bootstrap files. Deliberately enabling native workspace maintenance
+requires a separately designed and tested privacy boundary. Use the
+[upgrade procedure](operations-sops.md#sop-5-upgrade-or-roll-back) to inventory
+older files and preserve a backup before migration.
+
 The five sliders start at neutral 50 when the builder supplies no positions.
 The default persona still supplies a useful voice. A neutral slider means no
 additional directional instruction, rather than an absence of personality.
@@ -115,9 +132,13 @@ Each action changes a different durable record.
 ## Model, media, and service behavior
 
 Text uses GLM 5.2 with Sonnet 5 as fallback. Still images use Sonnet image
-understanding. Phone image intake accepts JPEG, PNG, GIF, and WebP, up to four
-images and 8 MiB per image. Audio, video, and incoming email attachments require
-relevant text or a supported still image.
+understanding. Phone and email accept PDF, JPEG, PNG, GIF and WebP, up to four
+attachments per message. The file budget defaults to 50 MiB and can be changed
+with `PLOW_ATTACHMENT_MAX_MB`. PDF previews cover at most four pages and 12,000
+text characters; scanned pages are rendered for image understanding. Authorized
+conversations also have the native `pdf` tool for page selection, passwords and
+further analysis. See [document handling](base-experience.md#documents-and-images).
+Audio and video require text or a supported still image.
 
 The Mac connection is optional for texting. When it is unavailable, the agent
 names the missing service and offers a usable next step. It does not invent

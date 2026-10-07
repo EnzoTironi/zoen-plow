@@ -1,0 +1,89 @@
+{
+  "sourceCommit": "151657b41dd6f8efaba0501a1b2dc6f14221ba6a",
+  "imageId": "sha256:06b3f33a38643a285493da7ddc329b4f16b512b028019b7e1b0f5143f90cfbc7",
+  "productTreeSha256": "7b2c6a33a9efab3b723d01a6ea78b56f618cff96fd5f7da79d8814142b64bce3",
+  "imageCopyInputs": {
+    "kind": "Dockerfile and actual COPY inputs, including LICENSE; docs/tests excluded",
+    "sourceCommit": "151657b41dd6f8efaba0501a1b2dc6f14221ba6a",
+    "paths": [
+      "Dockerfile",
+      "LICENSE",
+      "boot",
+      "plugin",
+      "prompt",
+      "skills",
+      "eval",
+      "build.ts",
+      "patch-runtime.ts",
+      "package.json",
+      "package-lock.json",
+      "tsconfig.json"
+    ],
+    "gitTreeListingSha256": "1fb3553d17ec80fa19d2cdedfa6944c520fff9f4d6a6a0a7625493a1d7771ff8",
+    "files": 49,
+    "copiedSourceFilesVerified": 48
+  },
+  "typeCheck": "passed",
+  "tests": 526,
+  "failures": 0,
+  "durationMs": 239594.436207,
+  "testConcurrency": 2,
+  "testCommand": "Exact existing repository CI image mounts and --test-concurrency=2; assertions/timeouts unchanged",
+  "testLogSha256": "4d6a0df5771aeea9241d514860c9062209c192d643e7dd51d59d62064fe78dfb",
+  "probeLogSha256": "c2a9487974ac4fd2f295ada8c266966fa4b1e4020d1cc3e5380ed6b5d36a4ce1",
+  "proxyLogSha256": "8e38eec603d7efa781ae0a4869681f39ee5c4f67e0361ddfaf44877680a84c03",
+  "nativeGateway": {
+    "completed": true,
+    "checks": 28,
+    "reportSha256": "cb293294f10000bbae036cfbd911de5f57a696570baf00cda08e1836cfd3feb0",
+    "logSha256": "6764ec53ef1c904ac61df5743a52ebe8eeadbe098d01888a0f79065a51e848c1",
+    "testHarnessSha256": "fa9f643d1a80daafd376e7a28c73195005964c348ab971996b5ba5c1298575c5",
+    "testOnlyCorrection": "After an intentional crash and observed native restart-loop breaker, use documented channels.start recovery; production breaker unchanged"
+  },
+  "retainedAttempts": [
+    {
+      "kind": "First complete CI-concurrency run",
+      "pass": 525,
+      "fail": 1,
+      "log": "checks-151657b-ci-concurrency2.log",
+      "logSha256": "d0b60a6496bf4a92fcd236d4d4c7b94292f9c3f850f5159c7199474eee6c6983"
+    },
+    {
+      "kind": "Unchanged targeted transport recheck",
+      "pass": 1,
+      "fail": 0,
+      "log": "checks-151657b-transport-targeted.log",
+      "logSha256": "0a577cec4d29d898fae903a271ef54b609e5c894b8adb6adba86c3f669a46198"
+    },
+    {
+      "kind": "Intermediate source retained: expanded prompt reduced Latch capacity",
+      "pass": 525,
+      "fail": 1,
+      "log": "checks-921d2c7-ci-concurrency2.log",
+      "logSha256": "ab84b537c90ec113de73b9efe877d421bcd1a4f6495bbd78636a81d7ccd983c2"
+    },
+    {
+      "kind": "First uncommitted budget draft",
+      "pass": 14,
+      "fail": 1,
+      "log": "checks-prompt-budget-draft.log",
+      "logSha256": "8d4b06a2de47a0306fab9d389c7e9d7afcbebda006f73a835c644ea69305c5c2"
+    },
+    {
+      "kind": "Second uncommitted budget draft",
+      "pass": 14,
+      "fail": 1,
+      "log": "checks-prompt-budget-draft-repeat.log",
+      "logSha256": "cf2ca66de1d9c91905ee8fe1810020d9d3b501a0fca92b8e4efc7376f718853d"
+    },
+    {
+      "kind": "Compacted final source focused contract",
+      "pass": 15,
+      "fail": 0,
+      "log": "checks-prompt-budget-compact-persona.log",
+      "logSha256": "b31cb7758b45c4a5c6adc13ac3b79fb90550f051684dd79639dcbcaaef574226"
+    }
+  ],
+  "firstRunFailure": "Transport checkpoint freshness deadline; first checkpoint observed instead of newer. Same targeted case and unchanged complete isolated repetition passed. Host scheduling cause has not been proven.",
+  "reasoning": "Offline checks completed before new source paid inputs; no previous source semantic grades transferred."
+}

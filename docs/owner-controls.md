@@ -76,11 +76,16 @@ participation guidance. Use the separate owner trust control to change authority
 ## Facts: `plow_memory`
 
 Actions are `get`, `remember`, `correct`, `forget`, `export`, and `reset`.
-Scope is `owner` or `conversation`. If omitted, the owner's main session selects
-owner scope; other conversations select their own scope.
+Scope is `owner` or `conversation`. Omitted scope always selects the current
+conversation, including the owner's main DM. "Only in this private chat" uses
+`conversation`. The explicit `owner` notebook is independent of the chat ID and
+is accessible only in the owner's main DM. Get and mutation receipts include
+`scopeMeaning` so the model can check the intended notebook before writing.
+Earlier draft versions used owner scope by default in the main DM; existing
+owner notes remain there and require an explicit `scope=owner` call.
 
-1. Get the current notes and `revision`.
-2. For every change, supply that number as `expectedRevision`.
+1. Get the intended scope's current notes and `revision`.
+2. For every change, use that same scope and number as `expectedRevision`.
 3. For correction or deletion, supply an existing note `id`.
 4. For remember or correct, supply `text`. Use `confirmed: false` for tentative
    facts and an ISO timestamp in `expiresAt` for a temporary note.
@@ -94,6 +99,13 @@ or owner notes.
 Examples: "Remember in this room that we chose Friday" and "Forget that dinner
 note." Forgetting a durable note does not remove historical transcripts or
 external provider copies.
+
+The base defaults native dreaming and pre-compaction memory flush to disabled,
+and autonomous Skill Workshop review to off. These are installation settings,
+not actions of `plow_memory` or the notification gate. An explicit existing
+opt-in remains unchanged. Older workspace memory files are separately retained;
+forget/reset cannot claim to erase them. Inspect and migrate private files before
+using a multi-user install. See [the prebuilt experience](default-experience.md).
 
 ## Commitments: `plow_tasks`
 
@@ -128,6 +140,8 @@ The receipt separates observed delivery state from scheduler reconciliation:
 | `scopeControl` | The requested scope and its persisted `paused` gate; removing it may leave another scope's pause active |
 | `directReplies` | `available_during_pause_and_resume`; notification pause does not mute conversation |
 | `schedulerJobs` | `not_checked`, `eligible_jobs_reconciled`, or `unconfirmed`; no claim that every job is enabled or disabled |
+| `jobsCreatedByThisControl` | Resume only; always `0`, describing this control's own effect |
+| `newTaskAuthorization` | Resume only; `not_granted_by_notification_control`; a fresh explicit request must authorize a new task separately |
 
 `get` reads the scope and current-conversation gates without querying the scheduler. A partial pause/resume
 returns the observed persisted gate and `schedulerJobs: "unconfirmed"`.
@@ -154,6 +168,11 @@ Resume restores only unchanged jobs disabled by this control. Confirmed entries
 must match their recorded revision; pending entries must match the recorded public
 definition before updating with the current revision. It does not undo a user's
 later schedule edits or re-enable jobs that were already disabled.
+It does not recreate requests refused while paused. A resume-only message grants
+no fresh authorization for those requests. A current message can explicitly
+request both resume and a new reminder; the reminder then needs a separate native
+creation receipt. Tool guidance and receipts help the model distinguish these
+intents, but they are not a parser or proof of natural-language consent.
 
 Resume opens the requested scope's delivery gate before asking the scheduler to
 re-enable jobs. If the scheduler accepts an enable but its response is lost, a

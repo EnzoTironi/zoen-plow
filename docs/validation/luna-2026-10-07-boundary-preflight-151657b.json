@@ -1,0 +1,35 @@
+{
+  "sourceCommit": "151657b41dd6f8efaba0501a1b2dc6f14221ba6a",
+  "imageId": "sha256:06b3f33a38643a285493da7ddc329b4f16b512b028019b7e1b0f5143f90cfbc7",
+  "kind": "No model calls; actual native media storage and pinned PDFium extraction; mocked HTTP responses with exact fixture bytes",
+  "maxBytes": 52428800,
+  "results": [
+    {
+      "name": "large.pdf",
+      "bytes": 9437184,
+      "sha256": "f9e18c8418bae3c7abf3c0c30c3557d204cd5bea57d3fb23ab3541985990273d",
+      "downloadedIntact": true,
+      "storedIntact": true,
+      "nativePdfWorkerText": "Synthetic boundary memo\r\nProject: Dune\r\nBudget ceiling: $100\r\nElm: $95\r\nFern: $145\r\nElm is $50 cheaper and within budget.",
+      "nativePdfWorkerElapsedMs": 600
+    },
+    {
+      "name": "exact-budget.pdf",
+      "bytes": 52428800,
+      "sha256": "41e47f90ff6ef506ac2762c0d252ed3b301fc35187869f86c5760319515395a4",
+      "downloadedIntact": true,
+      "storedIntact": true,
+      "nativePdfWorkerText": "Synthetic boundary memo\r\nProject: Harbor\r\nBudget ceiling: $110\r\nIris: $105\r\nJuniper: $165\r\nIris is $60 cheaper and within budget.",
+      "nativePdfWorkerElapsedMs": 185
+    },
+    {
+      "name": "exact-budget.png",
+      "bytes": 52428800,
+      "sha256": "595758fe5097b02db4a57c59e830eeccf2026679c85057499be2e373986eb145",
+      "downloadedIntact": true,
+      "storedIntact": true,
+      "nativePdfWorkerText": null,
+      "nativePdfWorkerElapsedMs": null
+    }
+  ]
+}

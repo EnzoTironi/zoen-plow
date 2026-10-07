@@ -122,7 +122,7 @@ declaring a send successful solely because the model says it succeeded.
 | Connected Mac | Ask for one synthetic file through Latch | Actual tool result matches the fixture, and the phone reply matches the result |
 | Preferences | Save a name, language or timezone, then inspect | Confirmed values are stored privately and survive restart |
 | Personality | Preview, save, restart, inspect and reset | Preview does not persist; save does; reset restores defaults without changing permissions |
-| Memory | Save, inspect, correct, export and forget a synthetic note | Correct scope and revisions; forgetting does not claim transcript erasure |
+| Memory | Save, inspect, correct, export and forget distinct synthetic notes in the current chat and explicit owner notebook | Default private-DM notes stay in that chat; explicit owner notes stay separate; correct revisions; forgetting does not claim transcript erasure |
 | Ordinary group | Direct question followed by unrelated chatter | Useful answer to the question; silence for unrelated chatter |
 | Coordination | Set a room goal, collect partial answers and finish | Speaker attribution stays correct; pending people remain pending; action needs a receipt |
 | Facilitation | Invite a specific discussion | One useful question at a time, with silence outside that invitation |
@@ -133,7 +133,7 @@ declaring a send successful solely because the model says it succeeded.
 | Cancellation | Cancel an actual listed native worker | Stop receipt and task state agree; no overlapping replacement or duplicate notice |
 | Reminder | Create a short synthetic one-shot reminder | Job exists with the right timezone and destination; one actual delivery arrives |
 | Pause | Pause, attempt new scheduling, send a direct question | No scheduled delivery or new schedule; the direct answer still arrives |
-| Resume | Resume and inspect job state before confirming restoration | Confirmed restoration matches scheduler state, including partial failures |
+| Resume | Refuse a new reminder while paused; resume only; then separately authorize a fresh reminder | No retrospective creation from resume alone; eligible existing jobs and a freshly authorized new reminder have separate receipts, including partial failures |
 | Image | Send an original synthetic still image | Image-capable model is selected; described contents match the card |
 | Unsupported media | Send an owned test audio/video attachment | Honest limit and a useful request for text or a still image |
 | Email draft | Ask for a draft | Draft stays in the requesting chat; no email is sent |

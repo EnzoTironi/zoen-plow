@@ -1,13 +1,16 @@
 # Base experience implementation checklist
 
-This records implementation coverage for the October 6, 2026 candidate based on
+This records implementation coverage for the October 7, 2026 candidate based on
 OpenClaw 2026.9.6. A check means the behavior has an implementation or maintained
 instruction contract and supporting tests/documentation. It does not establish
 that every model response or provider installation will behave correctly.
 
-Human tone review and an isolated live installation check remain separate
-acceptance steps. The [builder experience layer](https://github.com/EnzoTironi/zoen-plow/pull/11)
-contains images and a video uploaded with GH `--attach`. The
+Human tone review and complete real-recipient acceptance remain separate
+release steps. The [dated Luna validation record](validation/luna-2026-10-07.md)
+preserves complete recorded responses, AI decisions, runtime counterexamples,
+installation conditions and remaining service limits. The
+[validation evidence layer](https://github.com/EnzoTironi/zoen-plow/pull/17)
+must include images and a video uploaded with GH `--attach` before review. The
 [review guide](review-stack.md) records the consolidated stack and evidence boundaries.
 The [base experience contract](base-experience.md)
 describes enforcement, model-dependent decisions and supported limitations.
@@ -18,6 +21,7 @@ The [evaluation rubric](../eval/README.md#human-release-review) defines human re
 | Composition, identity and personality | `boot/extensions.ts`, `boot/prompt.ts`, `boot/personality.ts`; config, prompt, extension and experience tests; authenticated personality page |
 | First interaction and group participation | `prompt/BASE.md`; two-model dialogues; gateway quiet/direct-group checks; speaker/debounce tests |
 | Permissions and memory | Version 2 tool context, fresh membership checks, tool policies and scoped revisioned state; trust, owner-action and experience tests |
+| Automatic native maintenance | Missing dreaming/flush/Workshop settings default to off; native resolver and migration/restart tests; explicit choices and legacy-copy caveats in the upgrade SOP |
 | Commitments and workers | Native managed flows, isolated read-only worker and native task-ID cancellation; experience/worker tests and held-worker gateway checks |
 | Scheduled work and stop behavior | Persistent pause gate, revised scheduler jobs, gated cron tool sends and physical delivery; real gateway restart, partial pause and direct-reply checks |
 | Channels and media | Email routing/final tests, bounded phone images, Sonnet vision route, deliberate silence and private owner reports |
@@ -25,6 +29,12 @@ The [evaluation rubric](../eval/README.md#human-release-review) defines human re
 | Recovery and delivery | Paginated checkpoints, replay protection and delivery-unknown guard; transport/recovery and send tests |
 | Builder/runtime package | Versioned manifest, pinned compatibility patch, readiness health check, two starter images, full-state backup/restore and native SQLite usage reader |
 | Release evidence | Offline type/runtime/probe checks, real gateway fixture acceptance, live model dialogues, latency/usage reports and PR attachments |
+
+The [Assistant Benchmark adaptation guide](assistant-benchmark.md) adds original
+English jobs and measurable outcome criteria. A passing literal filter, an AI
+review, a synthetic send receipt and a real WebSocket connection answer different
+questions. None substitutes for human approval or an externally delivered email.
+The diagnostic Luna profile leaves the shipping default/fallback models intact.
 
 1. Define how the base, builder, owner, and conversation settings fit together.
 
@@ -105,7 +115,7 @@ The [evaluation rubric](../eval/README.md#human-release-review) defines human re
    - [x] P0: Make deliberate silence and duplicate-final suppression work consistently across normal replies, tool sends, and scheduled turns.
    - [x] P1: Use channel-appropriate length, formatting, quoting, and attachment behavior. Preserve meaning when splitting long messages.
    - [x] P1: Provide typing or progress indicators for active work, stop them promptly, and avoid indicators while merely observing a group.
-   - [x] P1: Publish the supported media types and limits, and test vision-capable model routing. Current configuration declares the primary model as text-only; email attachments are explicitly unsupported in the receive path.
+   - [x] P1: Publish supported media types and budgets, and test vision routing. The text primary is text-only; phone/email images use image understanding, and PDFs use bounded local previews plus the authorized native `pdf` tool.
    - [x] P1: Explain unsupported or failed media in plain language and offer a usable next step. Do not invent image or attachment contents.
 
 10. Make capabilities discoverable and failures recoverable.
@@ -141,6 +151,6 @@ The [evaluation rubric](../eval/README.md#human-release-review) defines human re
    - [x] P0: Add conversation evaluations that run representative dialogues on both the configured default and fallback models.
    - [x] P0: Evaluate silence, routing, permission enforcement, completion claims, recovery, and durable stop behavior with observable outcomes.
    - [ ] P1: Evaluate tone, unnecessary questions, irrelevant group replies, instruction adherence, and persona consistency using a human-reviewed rubric.
-   - [x] P1: Measure ordinary reply latency, task success, notification volume, duplicate sends, recovery failures, and per-task token cost. Set explicit acceptance targets before release.
+   - [x] P1: Record reply latency, observed task/notification effects, duplicates, recovery failures and token usage. Preserve unknown cost: subscription diagnostics do not have an enforced Plow token cap or a verified per-task monetary price. Set acceptance targets before release.
    - [ ] P1: Exercise a real owner DM, a normal group, a trusted group, email, reminders, and a disconnected Mac on a candidate image.
    - [x] P1: Attach screenshots and videos to experience-changing PRs using GH --attach, including quiet behavior, a useful group exchange, a cancelled reminder, and a recoverable failure.

@@ -1,0 +1,37 @@
+{
+  "kind": "Complete frozen native50 before stopping; every input has its own terminal, semantic grading remains separate",
+  "sourceCommit": "151657b41dd6f8efaba0501a1b2dc6f14221ba6a",
+  "ownInputs": 50,
+  "confirmedOwnInputTerminals": 50,
+  "segmentCounts": {
+    "main": 41,
+    "ownerMemory": 5,
+    "phoneImages": 4
+  },
+  "literalPrefilterPasses": 50,
+  "createdCronIds": [
+    "a16f1f73-77f9-4bfa-badc-3113565c3fe1",
+    "bb363a81-c8d4-42e8-a680-c1766de13cac",
+    "bff32f8b-91de-4ead-936e-3835a2a6fdd6",
+    "66c23f43-d6fe-4feb-b622-3342da8146e5"
+  ],
+  "frozenAtEpoch": 1791410616.979648,
+  "artifactSha256": {
+    "outcome-journeys.json": "5e77ddada8e0f43c874b0afbab1b1d873bc96b3fbdc12502e7a7a6196f6876c7",
+    "owner-memory/owner-memory-journeys.json": "1ab0170c24b040dea6c358a4a86b330e81670570bb8ceebeb4ae1e72cfc610e7",
+    "phone-images/image-journeys.json": "1562ee6c4233f7d32461b51703613f0da614bb8977dc52dd35f52ebba8f6593d",
+    "installation-conditions.json": "72fd3b77cff67cc568b9582f3f3e341bb8ecea8d40b78701871381046796f463",
+    "verified-bootstrap.json": "bd9aed31bfa8ef1950f5f7381d4897eb06f8a15d9f3598dcfdccc6ba838e3114",
+    "final-transcript.json": "16a73e74b7b3fe4f786f49e034af32e1d2e8bccd5f33e34cdbec4b37681c2dea",
+    "final-log.json": "faee89c5189bbb0ff4b25e1fce887bc0bf3eb3d2c6fbbc0ef06c0d29cb57f4a3",
+    "final-status.json": "d4ad7a2bae47daf4644479380ac36792d418938d824ee8eb0521de36bbd0ea6f",
+    "final-state-owner.json": "8b23deabad0f5b6ee23ca74cd22400e78a9db11c4f02d2f6d234a040be30cfb0",
+    "final-state-agent.json": "8f609e73e1e33d2827b51cffd80a22679ab73ac171c7d1d9a02623def9dd780a",
+    "final-state-cht_luna_home.json": "9f251714836f41adade44bb580c6f28328fcf36860ef8fb157bbbdd6a0b8c962",
+    "final-state-cht_luna_room.json": "00aa2e26633959a99209fbc2fa8ef2cea224041f972e5bfa96bd4772e94c02f1",
+    "final-native-owner.json": "c7dc9249d2dc85c02eb980e58eb2c1739528df94a1d3ca3c2aaf78f42a583b28",
+    "final-native-room.json": "653a2cbc1102920383846b74be908da53b084312da60f290baceb44e61415dd1",
+    "final-cron-list.json": "067a33bb27d521da81772c55efd4864e5d5afd7e31a14728ff77b6c6c609b2a0",
+    "final-cron-runs.json": "195d4017df51ea7bc839a548a588601b1455ef9a2834eb0b44c3f5903ea8b256"
+  }
+}

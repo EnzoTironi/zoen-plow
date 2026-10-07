@@ -16,6 +16,9 @@ Start with [the guided first-agent tutorial](docs/first-agent.md). Use
 [the builder SOPs](docs/builder-sops.md) to design, verify, and release a variant.
 [The documentation guide](docs/README.md) links the default behavior, complete
 manifest reference, extension procedure, and deployment and recovery SOPs.
+Use the [benchmark adaptation guide](docs/assistant-benchmark.md) to test complete
+user outcomes. The optional [Luna validation SOP](docs/luna-validation.md) covers
+authorized subscription-model diagnostics and isolated installations.
 
 ## Run it
 
@@ -221,8 +224,12 @@ during unrelated human conversation. Helper, coordinator and facilitator modes
 make participation explicit. Normal groups can use narrowly declared guest tools;
 full trust still grants every member access to owner resources.
 
-Phone still images up to 8 MiB use Sonnet image understanding. Audio/video and
-inbound email attachments need relevant text or a still image. Optional heartbeats
+Phone and email accept still images and PDFs. The attachment budget defaults to
+50 MiB per file and is configurable with `PLOW_ATTACHMENT_MAX_MB`; there is no
+fixed 8 MiB ceiling. PDF previews extract text and render scanned pages; the native
+`pdf` tool supports deeper analysis, page ranges and passwords in authorized chats.
+See [document handling](docs/base-experience.md#documents-and-images) for processing
+budgets and access rules. Audio/video need text or still images. Optional heartbeats
 honor persisted pause, quiet hours and notification frequency. Timed reminders
 use native automations. Memory deletion and task cancellation are separate from
 cancelling a scheduled job.
