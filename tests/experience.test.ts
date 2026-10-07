@@ -110,6 +110,59 @@ test("scoped memory records provenance, supports correction/export/expiry/forget
   assert.deepEqual((await memory.execute("get", { action: "get" })).details.notes, []);
 });
 
+test("memory defaults to the current chat in the owner's DM and preserves the separate owner notebook", async t => {
+  const { tool } = await fixture(t);
+  const memory = tool("plow_memory", true);
+  const ownerScope = { account, conversation: "owner" };
+  await updateExperience(ownerScope, () => {}, state => {
+    state.notesRevision = 3;
+    state.notes.push({ id: "existing-owner-note", text: "Keep my owner-private preference", source: "plow-owner", confirmed: true, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  });
+  const current = (await memory.execute("chat-get", { action: "get" })).details;
+  assert.equal(current.scope, "conversation");
+  assert.match(current.scopeMeaning, /Only this chat/);
+  assert.equal(current.revision, 0);
+  assert.deepEqual(current.notes, []);
+  const saved = (await memory.execute("chat-save", { action: "remember", text: "Keep this detail in this chat", expectedRevision: current.revision })).details;
+  assert.equal(saved.scope, "conversation");
+  assert.equal((await readExperience({ account, conversation: home.uid })).notes[0].text, "Keep this detail in this chat");
+  const ownerOnly = (await memory.execute("owner-get", { action: "get", scope: "owner" })).details;
+  assert.equal(ownerOnly.revision, 3);
+  assert.match(ownerOnly.scopeMeaning, /independent of this chat/);
+  assert.deepEqual(ownerOnly.notes.map((note: { id: string }) => note.id), ["existing-owner-note"]);
+  await assert.rejects(memory.execute("wrong-id", { action: "forget", scope: "owner", id: saved.notes[0].id, expectedRevision: ownerOnly.revision }), /existing memory id/);
+  await memory.execute("chat-forget", { action: "forget", id: saved.notes[0].id, expectedRevision: saved.revision });
+  assert.deepEqual((await memory.execute("chat-reopen", { action: "get" })).details.notes, []);
+  assert.equal((await memory.execute("owner-reopen", { action: "get", scope: "owner" })).details.notes[0].id, "existing-owner-note");
+  await assert.rejects(tool("plow_memory").execute("guest-owner", { action: "get", scope: "owner" }), /owner's main/);
+});
+
+test("notification resume changes existing jobs without creating or authorizing declined work", async t => {
+  const { tool } = await fixture(t);
+  const scope = { account, conversation: room.uid };
+  const job = { id: "previously-suspended", enabled: false, configRevision: "r1", owner: { agentId: "main", sessionKey: "agent:main:plow:chat:group:cht_room", accountId: "chat" }, delivery: { channel: "plow", accountId: "chat", to: room.uid } };
+  await updateExperience(scope, () => {}, state => { state.paused = true; state.suspendedJobs = [{ id: job.id, revision: job.configRevision }]; });
+  const methods: string[] = [];
+  t.mock.method(scheduler, "request", async (method: string, params: any) => {
+    methods.push(method);
+    if (method === "cron.list") return { jobs: [structuredClone(job)] };
+    if (method === "cron.get") return structuredClone(job);
+    assert.equal(method, "cron.update", "the control cannot create a new job");
+    assert.equal(params.id, job.id);
+    job.enabled = params.patch.enabled;
+    job.configRevision = "r2";
+    return structuredClone(job);
+  });
+  const result = await tool("plow_notifications", false, { senderIsOwner: true, requesterSenderId: "plow-owner" }).execute("resume", { action: "resume" });
+  assert.equal(result.details.status, "complete");
+  assert.equal(result.details.jobsCreatedByThisControl, 0);
+  assert.equal(result.details.newTaskAuthorization, "not_granted_by_notification_control");
+  assert.match(result.details.summary, /Previously declined work still needs a fresh explicit request/);
+  assert.equal(job.enabled, true);
+  assert.deepEqual(methods, ["cron.list", "cron.get", "cron.update"]);
+  assert.deepEqual((await readExperience(scope)).suspendedJobs, []);
+});
+
 test("room purpose and mode require a current grant and do not change trust", async t => {
   const { tool } = await fixture(t);
   await assert.rejects(tool("plow_room").execute("guest", { action: "set", settings: { mode: "coordinator" } }), /not granted/);

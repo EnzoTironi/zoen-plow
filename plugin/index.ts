@@ -14,7 +14,7 @@ export { acknowledgePluginHandoff } from "./transport.ts";
 import { emailFooter, emailLabel, emailTurnPrompt, originOf, recordOrigin } from "./email.ts";
 import { installExperienceTools, notificationPaused } from "./experience.ts";
 import { experienceContext, readExperience, updateExperience, quietNow } from "./experience-state.ts";
-import { inboundImage, IMAGE_TYPES } from "./media.ts";
+import { inboundImage, IMAGE_TYPES, ImageLimitError } from "./media.ts";
 import { installPersonalityPage } from "./personality-page.ts";
 
 let runtime: PluginRuntime;
@@ -146,7 +146,13 @@ async function receive(account: Account, cfg: OpenClawConfig, chat: Chat, messag
         const buffer = await inboundImage(new URL(attachment.url, account.apiBase), attachment.content_type);
         const saved = await runtime.channel.media.saveMediaBuffer(buffer, attachment.content_type, "inbound", undefined, attachment.filename);
         media.push({ path: saved.path, contentType: attachment.content_type, fileName: attachment.filename });
-      } catch { mediaIssues.push("An image could not be downloaded within the 8 MiB limit. Ask for a smaller image or relevant text; do not guess its contents."); }
+      } catch (error) {
+        mediaIssues.push(error instanceof ImageLimitError
+          ? error.reason === "declared"
+            ? "The server reported a size above 8 MiB, so this image download was skipped. Its actual size is unverified. Ask for a smaller image or relevant text; do not guess its contents or claim a measured file size."
+            : "The image download exceeded 8 MiB and was stopped. Ask for a smaller image or relevant text; do not guess its contents."
+          : "An image could not be downloaded or processed. The cause is unverified. Ask for relevant text or a supported still image; do not guess its contents or failure cause.");
+      }
     }
     if (message.attachments.length > 4) mediaIssues.push("Only the first four images can be inspected in one message.");
   }
@@ -527,14 +533,14 @@ export default defineChannelPluginEntry({
       }
       return {
         name: "plow_send_email", label: "Send email from your Plow mailbox",
-        description: `${cfg && plugin.config.resolveAccount(cfg, "chat").emailLineUid ? "Your own mailbox is configured." : "No own mailbox is configured. Sending and listing are unavailable; drafting in this chat is available."} Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. The tool adds a footer naming you as the owner's AI assistant on Plow; sign however you like. A requested chat draft is text, not a send; do not call this tool for it. Missing mailbox provisioning blocks sending and receiving, not drafting. Use the requested sender identity and respect excluded accounts. Mail in the owner's own name needs their requested account and approval in chat. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
+        description: `${cfg && plugin.config.resolveAccount(cfg, "chat").emailLineUid ? "Your own mailbox is configured." : "No own mailbox is configured. Do not attempt sending or listing: explain that mailbox provisioning is missing and offer a draft in this chat."} Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to an array of email addresses (even for one recipient) and give a subject. A string recipient is only a thread chat uid, not an email address. If arguments are rejected, inspect the schema before explaining capabilities: recipient validation does not mean new email addresses are unsupported. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. The tool adds a footer naming you as the owner's AI assistant on Plow; sign however you like. A requested chat draft is text, not a send; do not call this tool for it. Missing mailbox provisioning blocks sending and receiving, not drafting. Use the requested sender identity and respect excluded accounts. Mail in the owner's own name needs their requested account and approval in chat. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
         parameters: {
           type: "object", additionalProperties: false,
           properties: {
             action: { type: "string", enum: ["send", "list"], description: "send (the default) or list." },
             // The chat-uid pattern makes OpenClaw read a JSON-encoded address list as the array it is.
             to: { anyOf: [{ type: "string", pattern: "^cht_[A-Za-z0-9_-]+$" }, { type: "array", minItems: 1, items: { type: "string" } }],
-              description: "An email thread's chat uid to reply in it, or a list of email addresses to start a new thread." },
+              description: "A string cht_… thread uid to reply, or an array such as [\"pat@example.test\"] to start a new thread. Even one new recipient must be an array." },
             subject: { type: "string", minLength: 1, description: "Required when starting a new thread; not used on a reply." },
             body: { type: "string", minLength: 1, description: "The email body." },
           },

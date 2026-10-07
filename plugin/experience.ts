@@ -29,7 +29,7 @@ async function privateScope(account: Account, ctx: Context): Promise<Scope> {
 }
 const memoryArgs = z.object({
   action: z.enum(["get", "remember", "correct", "forget", "export", "reset"]),
-  scope: z.enum(["owner", "conversation"]).optional(), id: z.string().optional(),
+  scope: z.enum(["owner", "conversation"]).default("conversation").describe("Conversation is this chat only, including the owner's private chat. Owner is a separate owner-private notebook, independent of the current chat ID; choose it only when that broader scope is explicitly requested."), id: z.string().optional(),
   text: z.string().trim().min(1).max(1000).optional(), confirmed: z.boolean().default(true),
   expiresAt: z.string().datetime().optional(),
   expectedRevision: z.number().int().nonnegative().optional(),
@@ -181,7 +181,7 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
     if (args.action === "set" && !args.preferences) throw new Error("Supply the confirmed preferences");
     return (await updateExperience(scope, ctx.assertInvocationCurrent, state => { state.preferences = args.action === "reset" ? {} : { ...state.preferences, ...args.preferences }; })).preferences;
   });
-  tool("plow_personality", "From the owner's main DM, inspect, preview, set or reset this agent's five personality sliders (integers 0–100, neutral 50). Settings apply across its conversations and survive restart. Omitted axes keep saved values. This changes voice only, never permissions, room modes or notification policy. Preview never saves; reset returns to the builder persona.", personalityArgs, async (ctx, args) => {
+  tool("plow_personality", "From the owner's main DM, inspect, preview, set or reset this agent's five personality sliders (integers 0–100, neutral 50). Settings apply across its conversations and survive restart. Omitted axes keep saved values. This changes voice only, never permissions, room modes or notification policy. Preview never saves: label the sample as an unsaved preview and say saved settings are unchanged. Reset returns to the builder persona.", personalityArgs, async (ctx, args) => {
     const privateContext = await privateScope(accountFor(ctx), ctx);
     const scope = { ...privateContext, conversation: "agent" };
     const current = (await readExperience(scope)).personality;
@@ -202,13 +202,14 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
     const state = args.action === "get" ? await readExperience(scope) : await updateExperience(scope, ctx.assertInvocationCurrent, value => { value.room = args.action === "reset" ? {} : { ...value.room, ...args.settings }; });
     return { mode: account.groupMode ?? "helper", ...state.room };
   });
-  tool("plow_memory", "Inspect, remember, correct, forget, export or reset scoped facts. Owner scope requires the owner's main DM. Conversation scope is only this room. Get first and pass its revision as expectedRevision for every change; stale writes are rejected, including after forgetting. Supply confirmed=false for tentative notes; use id for correction/deletion. Historical transcripts have separate retention.", memoryArgs, async (ctx, args) => {
+  tool("plow_memory", "Inspect, remember, correct, forget, export or reset scoped facts. Default conversation scope means only this chat, even in the owner's private DM. A request such as 'only in our private chat' uses conversation scope. Owner scope is a separate owner-private notebook independent of the chat ID, accessible only in the owner's main DM; use it only for an explicitly requested owner-private scope. Get the intended scope first, then change that same scope with its expectedRevision; stale writes are rejected, including after forgetting. Supply confirmed=false for tentative notes; use id for correction/deletion. Historical transcripts have separate retention.", memoryArgs, async (ctx, args) => {
     const account = accountFor(ctx);
-    const selected = args.scope ?? (ctx.sessionKey === "agent:main:main" ? "owner" : "conversation");
+    const selected = args.scope;
+    const scopeMeaning = selected === "conversation" ? "Only this chat, identified by its conversation ID" : "Separate owner-private notebook, independent of this chat's ID; not the scope for 'only this chat'";
     const scope = selected === "owner" ? await privateScope(account, ctx) : await activeScope(account, ctx, "plow_memory", !["get", "export"].includes(args.action));
     if (["get", "export"].includes(args.action)) {
       const state = await readExperience(scope);
-      return { scope: selected, notes: state.notes, revision: state.notesRevision };
+      return { scope: selected, scopeMeaning, notes: state.notes, revision: state.notesRevision };
     }
     const state = await updateExperience(scope, ctx.assertInvocationCurrent, value => {
       if (args.expectedRevision !== value.notesRevision) throw new Error("Memory changed or no revision was supplied; get current notes before changing them");
@@ -228,7 +229,7 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
         value.notes.push({ id: randomUUID(), text: args.text, source: ctx.requesterSenderId!, confirmed: args.confirmed, createdAt: now, updatedAt: now, ...(args.expiresAt ? { expiresAt: args.expiresAt } : {}) });
       }
     });
-    return { scope: selected, notes: state.notes, revision: state.notesRevision };
+    return { scope: selected, scopeMeaning, notes: state.notes, revision: state.notesRevision };
   });
   tool("plow_tasks", "Durable current-conversation commitments using native task flows. Create requires goal and observable completion condition; this does not schedule a wakeup. List before resuming after restart. Finish requires factual tool/provider evidence; uncertain delivery must fail with delivery=unknown. Cancel stops native work; cancel associated automations separately.", taskArgs, async (ctx, args, callId) => {
     await activeScope(accountFor(ctx), ctx, "plow_tasks", args.action !== "list");
@@ -256,7 +257,7 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
     const stateJson = { ...previous, evidence: args.evidence, delivery: args.delivery ?? null };
     return args.action === "finish" ? await flows.finish({ ...mutation, stateJson }) : await flows.fail({ ...mutation, stateJson, blockedSummary: args.evidence });
   });
-  tool("plow_notifications", "Inspect or persist pause/resume for scheduled phone work; scope=all is owner-main-DM only. Pause blocks scheduled delivery and new jobs; direct replies work. Resume reconciles only unchanged jobs. Receipts separate the delivery gate from unconfirmed scheduler changes. Get does not inspect jobs. Use diagnostics=true only for explicitly requested internal recovery details; journal IDs are intent, never live job status.", notifyArgs, async (ctx, args) => {
+  tool("plow_notifications", "Inspect or persist pause/resume for scheduled phone work; scope=all is owner-main-DM only. Pause blocks scheduled delivery and new jobs; direct replies work. Resume restores only unchanged existing jobs suspended by this control. It never creates jobs or authorizes a previously declined reminder. A resume-only message must not recreate work requested while paused; a new task needs a fresh explicit request, handled separately. Receipts separate the delivery gate from unconfirmed scheduler changes. Get does not inspect jobs. Use diagnostics=true only for explicitly requested internal recovery details; journal IDs are intent, never live job status.", notifyArgs, async (ctx, args) => {
     const account = accountFor(ctx);
     if (account.accountId !== "chat") throw new Error("Notification controls require a phone conversation");
     const scope = args.scope === "all" ? await privateScope(account, ctx) : await activeScope(account, ctx, "plow_notifications", args.action !== "get");
@@ -276,13 +277,15 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
         : "Scheduled delivery here is paused";
       const jobs = args.action === "get" ? "Job state was not checked."
         : complete ? "Eligible job changes were reconciled." : "Scheduler changes are unconfirmed.";
+      const authorization = args.action === "resume" ? " This control creates no jobs and grants no new task authorization. Previously declined work still needs a fresh explicit request." : "";
       return {
         status: args.action === "get" ? "observed" : complete ? "complete" : "incomplete",
-        summary: `${delivery}; direct replies still work. ${jobs}`,
+        summary: `${delivery}; direct replies still work. ${jobs}${authorization}`,
         scheduledDeliveryHere: deliveryPaused ? "paused" : "not_paused",
         directReplies: "available_during_pause_and_resume",
         schedulerJobs: args.action === "get" ? "not_checked" : complete ? "eligible_jobs_reconciled" : "unconfirmed",
         scopeControl: { scope: args.scope, paused: state.paused },
+        ...(args.action === "resume" ? { jobsCreatedByThisControl: 0, newTaskAuthorization: "not_granted_by_notification_control" } : {}),
         ...(args.diagnostics ? { diagnostics: { suspendedJobs: state.suspendedJobs, meaning: "Recovery intent; not current job state", ...(failure ? { failure } : {}) } } : {}),
       };
     };

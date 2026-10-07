@@ -4,6 +4,10 @@ Use this SOP before releasing a base image or a specialized agent. Keep the
 candidate commit, image ID, runtime version, prompt hashes and test dates with
 the results. Passing a previous image does not validate a later change.
 
+Use the [benchmark adaptation guide](assistant-benchmark.md) to choose complete
+user jobs, test continuing routines and groups, and run an auditable improvement
+loop. It adds product-level targets without inventing an external benchmark score.
+
 The base has three separate kinds of evidence:
 
 | Evidence | What it establishes | What needs another check |

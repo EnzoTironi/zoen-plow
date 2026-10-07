@@ -68,7 +68,7 @@ execution and candid language still obey current authorization and privacy.
 | `plow_personality` | Owner main phone DM; get, preview, partial set, reset public voice |
 | `plow_preferences` | Owner main phone DM; confirmed name, language, IANA timezone, private voice, verbosity, initiative, quiet hours and heartbeat frequency |
 | `plow_room` | Current conversation; get, set, reset purpose and helper/coordinator/facilitator mode |
-| `plow_memory` | Owner-private or current conversation; get, remember, correct, forget, export, reset with provenance and optional expiry |
+| `plow_memory` | Current conversation by default, including the owner's DM; explicit owner-private notebook also available in the owner's main DM; get, remember, correct, forget, export, reset with provenance and optional expiry |
 | `plow_tasks` | Current conversation; durable commitments with goal, completion condition, deadline, evidence and native task lifecycle |
 | `plow_notifications` | Current phone conversation or owner main DM for all; persist pause/resume and disable/re-enable eligible jobs |
 
@@ -100,18 +100,6 @@ Forget/reset removes its facts from subsequent prompt injection; it does not
 erase historical transcripts or separately created files/indexes, and it does not
 cancel tasks. Remove those artifacts separately when requested. The base does
 not build another memory index.
-
-Native dreaming, pre-compaction memory flush and autonomous Skill Workshop
-review default to off. They are separate workspace retention/mutation paths,
-not Plow memory operations. Missing settings migrate to off; explicit values
-and opaque owner includes survive. Disabling maintenance does not erase older
-copies. Shared bootstrap files must contain only public agent guidance. If an
-eligible root `MEMORY.md` exists through legacy configuration or deliberate
-opt-in, the pinned runtime can include it in non-owner direct-chat bootstrap.
-This is a conditional source-confirmed path, not an observed disclosure. Group
-bootstrap excludes that file; opt-in requires a separate privacy boundary.
-Private facts belong in the scoped store. See the [prebuilt defaults](default-experience.md)
-and [upgrade procedure](operations-sops.md#sop-5-upgrade-or-roll-back).
 
 Tasks use native managed flows bound to the current session. They distinguish
 queued, running, waiting, succeeded, failed and cancelled states; evidence records

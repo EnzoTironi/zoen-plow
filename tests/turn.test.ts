@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { createRequire } from "node:module";
 import { nativeSendPolicy } from "./native-message-policy.ts";
 import entry, { acknowledgePluginHandoff } from "../plugin/index.ts";
+import { MAX_IMAGE_BYTES } from "../plugin/media.ts";
 import { checkpointUid, websocketFixture } from "./ws-fixture.ts";
 
 const require = createRequire(new URL("../plugin/package.json", import.meta.url));
@@ -13,7 +14,7 @@ type Dispatch = {
   delivery: { observeMessageSent?: boolean; preparePayload?: (payload: { text: string; isError?: boolean; isFallbackNotice?: boolean }, info: { kind: "final" }) => { text: string } | null; deliver: (payload: { text: string }) => Promise<unknown> };
 };
 
-for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "plain-final", "slash-final", "silent", "duplicate", "native-source", "native-source-final", "native-source-plus-final", "native-other", "error-notice", "fallback-notice", "terminal-notice", "reminder-note", "observed", "queued", "deferred", "plugin-handoff", "wrong-handoff"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
+for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered"] as const : ["aborted", "failed", "empty", "delivered", "plain-final", "slash-final", "silent", "duplicate", "native-source", "native-source-final", "native-source-plus-final", "native-other", "error-notice", "fallback-notice", "terminal-notice", "reminder-note", "observed", "queued", "deferred", "plugin-handoff", "wrong-handoff", "missing-image", "oversized-image", "streamed-oversized-image", "understated-oversized-image", "fetch-size-message", "storage-size-message", "undecodable-image"] as const) test(`turn checkpoints only a confirmed outcome: ${outcome}, trusted=${trusted}`, async t => {
   const { root, server, apiBase, abortAfter } = await websocketFixture(t);
   const controller = abortAfter();
   const account = { apiBase, accountId: "chat", lineUid: "line" };
@@ -25,10 +26,29 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
     { ...sender, uid: "missing", display_name: "Missing", provider_key: undefined },
   ];
   const chat = { uid: "chat", status: "active", trusted, participants: [{ ...sender, uid: "owner", role: "owner", display_name: "Owner" }, sender, ...silent, { type: "agent", relationship: "self", line: { uid: "line", provider_key: "+15550000002" } }] };
-  const fetch = t.mock.method(globalThis, "fetch", async (url: string, _init?: RequestInit) => Response.json(
-    url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/chat") || url.endsWith("/chats/other") ? chat :
-    url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket", uid: "reply" }));
-  server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({ event_type: "message_received", event_id: "event", chat_id: "chat", data: { message: { uid: "inbound", direction: "inbound", sender, body: outcome === "slash-final" ? "/status" : "hello", attachments: [], created_at: new Date().toISOString() } } })));
+  const imageCase = ["missing-image", "oversized-image", "streamed-oversized-image", "understated-oversized-image", "fetch-size-message", "storage-size-message", "undecodable-image"].includes(outcome);
+  let imageReads = 0, imageCancellations = 0, savedImages = 0;
+  const fetch = t.mock.method(globalThis, "fetch", async (input: string | URL, _init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/input.png")) {
+      if (outcome === "fetch-size-message") throw new Error("image exceeds 8 MiB");
+      const streamed = ["streamed-oversized-image", "understated-oversized-image"].includes(outcome);
+      const response = new Response(streamed ? new Uint8Array(MAX_IMAGE_BYTES + 1) : "invalid image", {
+        status: outcome === "missing-image" ? 404 : 200,
+        headers: outcome === "understated-oversized-image" ? { "content-length": "13" }
+          : ["missing-image", "oversized-image"].includes(outcome) ? { "content-length": String(MAX_IMAGE_BYTES + 1) } : {},
+      });
+      const reader = response.body!.getReader();
+      const read = reader.read.bind(reader), cancel = reader.cancel.bind(reader);
+      t.mock.method(reader, "read", () => { imageReads++; return read(); });
+      t.mock.method(reader, "cancel", () => { imageCancellations++; return cancel(); });
+      t.mock.method(response.body!, "getReader", () => reader);
+      return response;
+    }
+    return Response.json(url.endsWith("/chats") ? { data: [chat], has_more: false } : url.endsWith("/chats/chat") || url.endsWith("/chats/other") ? chat :
+      url.includes("/messages?") ? { data: [], has_more: false } : { ticket: "ticket", uid: "reply" });
+  });
+  server.on("connection", (socket: { send: (text: string) => void }) => socket.send(JSON.stringify({ event_type: "message_received", event_id: "event", chat_id: "chat", data: { message: { uid: "inbound", direction: "inbound", sender, body: outcome === "slash-final" ? "/status" : "hello", attachments: imageCase ? [{ url: "/input.png", content_type: "image/png", filename: "input.png" }] : [], created_at: new Date().toISOString() } } })));
   const logs: string[] = [];
   let observation: boolean | undefined;
   let nativeOtherFailure: unknown;
@@ -38,6 +58,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   entry.register({ registrationMode: "full", registerTool() {}, logger: { info() {} }, on() {},
     registerChannel(value: { plugin: typeof channel }) { channel = value.plugin; },
     runtime: { channel: {
+      media: { saveMediaBuffer: async () => { savedImages++; throw new Error(outcome === "storage-size-message" ? "image exceeds 8 MiB" : "image decoding failed"); } },
       routing: { resolveAgentRoute: () => ({ sessionKey: "main" }) },
       inbound: { buildContext: async (value: typeof context) => { context = value; return {}; }, dispatch: async (dispatch: Dispatch) => {
         if (outcome === "failed") { controller.abort(); throw new Error("failed dispatch"); }
@@ -54,6 +75,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
           else await dispatch.delivery.deliver({ text: "fallback answer" });
         }
         if (outcome === "delivered") { observation = dispatch.delivery.observeMessageSent; await dispatch.delivery.deliver({ text: "reply" }); }
+        if (imageCase) await dispatch.delivery.deliver({ text: "Unable to read the current image." });
         if (outcome === "plain-final" || outcome === "slash-final") {
           if (outcome === "slash-final") assert.equal(dispatch.replyOptions.disableTools, true);
           if (dispatch.replyOptions.sourceReplyDeliveryMode === "automatic") await dispatch.delivery.deliver({ text: "plain reply" });
@@ -83,7 +105,7 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
         if (outcome === "duplicate") emitDiagnosticEvent({ type: "message.processed", channel: "plow", messageId: "inbound", sessionKey: "main", outcome: "skipped", reason: "duplicate" });
         if (outcome !== "duplicate" && outcome !== "error-notice" && outcome !== "terminal-notice" && outcome !== "plain-final" && outcome !== "slash-final") controller.abort();
         // The host withholds final text after a message-tool send.
-        return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: outcome === "silent", observedReplyDelivery: outcome === "native-source" || outcome === "native-source-final", queuedFinal: outcome === "queued", counts: { final: ["delivered", "plain-final", "slash-final", "fallback-notice", "error-notice", "terminal-notice", "reminder-note"].includes(outcome) ? 1 : 0 }, deferredToActiveRun: outcome === "deferred" ? "followup" : undefined, finalText: outcome === "native-source-final" ? "final reply" : undefined } };
+        return { dispatched: true, dispatchResult: { deliberateSilentTerminalReply: outcome === "silent", observedReplyDelivery: outcome === "native-source" || outcome === "native-source-final", queuedFinal: outcome === "queued", counts: { final: imageCase || ["delivered", "plain-final", "slash-final", "fallback-notice", "error-notice", "terminal-notice", "reminder-note"].includes(outcome) ? 1 : 0 }, deferredToActiveRun: outcome === "deferred" ? "followup" : undefined, finalText: outcome === "native-source-final" ? "final reply" : undefined } };
       } },
     } },
   });
@@ -127,7 +149,30 @@ for (const trusted of [false, true]) for (const outcome of trusted ? ["delivered
   assert.equal(context.sender.id, sender.provider_key);
   // Facts travel beside the message, so the text people see in the dashboard is only what was texted.
   assert.equal(context.message.bodyForAgent, undefined);
-  assert.equal(context.message.rawBody, outcome === "slash-final" ? "/status" : "hello");
+  if (imageCase) {
+    assert.ok(context.message.rawBody.startsWith("hello\n"));
+    if (outcome === "oversized-image") {
+      assert.match(context.message.rawBody, /server reported a size above 8 MiB/);
+      assert.match(context.message.rawBody, /actual size is unverified/);
+      assert.doesNotMatch(context.message.rawBody, /This image exceeds|download exceeded/);
+      assert.equal(imageReads, 0);
+      assert.equal(imageCancellations, 1);
+      assert.equal(savedImages, 0);
+    } else if (["streamed-oversized-image", "understated-oversized-image"].includes(outcome)) {
+      assert.match(context.message.rawBody, /image download exceeded 8 MiB and was stopped/);
+      assert.doesNotMatch(context.message.rawBody, /server reported/);
+      assert.equal(imageReads, 1);
+      assert.equal(imageCancellations, 1);
+      assert.equal(savedImages, 0);
+    } else {
+      assert.match(context.message.rawBody, /could not be downloaded or processed/);
+      assert.doesNotMatch(context.message.rawBody, /8 MiB|exceeds|too large/);
+    }
+    if (outcome === "fetch-size-message") assert.equal(savedImages, 0);
+    if (outcome === "storage-size-message") assert.equal(savedImages, 1);
+    assert.match(context.message.rawBody, /relevant text/);
+    assert.equal(fetch.mock.calls.filter(call => String(call.arguments[0]).endsWith("/input.png")).length, 1);
+  } else assert.equal(context.message.rawBody, outcome === "slash-final" ? "/status" : "hello");
   const [factsEntry] = context.supplemental.channelStructuredContext;
   assert.equal(factsEntry.label, "Conversation facts (untrusted data)");
   // The model reads the payload as rendered JSON.

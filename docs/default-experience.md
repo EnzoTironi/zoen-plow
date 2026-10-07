@@ -49,6 +49,20 @@ Private owner preferences enter only the owner's main phone DM. Public personali
 is the agent's style across conversations. Room purpose and notes stay in their
 own scope.
 
+`plow_memory` defaults to `scope=conversation` in every chat, including the
+owner's private DM. "Remember this only in our private chat" means that chat's
+conversation ID. The separate `scope=owner` notebook is accessible only in the
+owner's main DM and is independent of the current chat ID. It requires an
+explicit request for owner-private memory. Both scopes have their own notes and
+revisions. Get the intended scope before changing it, then use that same scope
+and revision. Receipts describe which notebook changed.
+
+Earlier draft versions defaulted an omitted scope to `owner` in the main DM.
+Existing owner notes stay in that notebook; the base does not move, merge or
+delete them. Builders that deliberately use the owner notebook must now pass
+`scope=owner` explicitly. Forgetting a note affects its notebook, not historical
+messages or another notebook.
+
 The five sliders start at neutral 50 when the builder supplies no positions.
 The default persona still supplies a useful voice. A neutral slider means no
 additional directional instruction, rather than an absence of personality.
@@ -83,6 +97,12 @@ Pause is persisted before the base changes scheduler jobs. Scheduled physical
 delivery checks that gate, including when a reminder is already generating.
 Direct answers remain available while scheduled notifications are paused.
 Resume restores only unchanged jobs that this control suspended.
+It creates no jobs and grants no new task authorization. A request refused while
+paused needs a fresh explicit request after resume. "Resume notifications" alone
+does not recreate it. A message that explicitly asks to resume and create a new
+reminder can authorize both, and the new reminder still needs its own creation
+receipt. The tool description and receipt explain this distinction to the model;
+they do not prove that the model interpreted the user's consent correctly.
 
 Optional heartbeats use a 30-minute minimum interval unless the owner changes it.
 Quiet hours apply to optional heartbeats. An explicitly timed reminder retains

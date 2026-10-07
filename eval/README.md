@@ -15,7 +15,7 @@ npm run eval -- --credentials /PRIVATE/test-credentials --cases eval/experience-
 npm run eval -- --credentials /PRIVATE/test-credentials --case resume-partial-failure --repeat 3
 ```
 
-The original matrix contains 22 scenarios. `experience-cases.json` adds 36
+The original matrix contains 22 scenarios. `experience-cases.json` adds 37
 English scenarios with explicit qualitative review criteria. Run both matrices.
 Scenario and message objects reject unknown fields before any paid request.
 For example, `contain` and `maxCharacters` are invalid; use `contains` and
@@ -125,6 +125,9 @@ node eval/run-codex.ts --codex-home "$lab_auth_dir" \
   --cases eval/cases.json,eval/experience-cases.json \
   --repeat 3 --concurrency 2 --output /TMP/luna-round-1.json \
   --source-revision "$(git rev-parse HEAD)"
+node eval/run-codex.ts --codex-home "$lab_auth_dir" \
+  --cases eval/benchmark-cases.json --repeat 3 \
+  --output /TMP/luna-benchmark-round-1.json
 rm -rf "$lab_auth_dir"
 ```
 
@@ -151,7 +154,7 @@ The subscription transport does not enforce the Plow evaluator's `max_tokens`
 cap. Reports explicitly record `effectiveMaxTokens: null` and unknown cost,
 rather than treating an absent price as free. Keep those conditions separate
 from GLM/Sonnet comparisons. Literal passes require qualitative review and the
-real tool journeys in the [experience validation SOP](../docs/experience-validation.md).
+real tool journeys in the [benchmark adaptation guide](../docs/assistant-benchmark.md).
 
 ## Canonical scenarios and historical reports
 

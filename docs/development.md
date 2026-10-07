@@ -12,6 +12,12 @@ runtime tests use the SDK shipped in the pinned image. The plugin is an npm
 workspace: CI and the image use the root lock, with development, peer and optional
 dependencies omitted from the image install.
 
+The pinned Node runtime strips TypeScript types when running source files.
+`erasableSyntaxOnly` rejects syntax that needs a transpiler, including constructor
+parameter properties. Declare the field and assign it in the constructor instead.
+Run source-based checks inside the image when they import absolute native SDK
+paths such as `/app/dist`; a host-only run cannot supply those paths.
+
 `tests/native-maintenance.test.ts` calls the pinned dreaming resolver, Workshop
 job projection and actual memory plugin's registered flush-plan resolver. It
 verifies off/disabled results without executing a model, filesystem maintenance
