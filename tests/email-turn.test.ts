@@ -10,7 +10,7 @@ import { websocketFixture } from "./ws-fixture.ts";
 import { nativeSendPolicy } from "./native-message-policy.ts";
 
 const toolEntry = (await import(new URL("../plugin/index.ts?tool-runtime", import.meta.url).href)).default as typeof entry;
-type Tool = { name: string; execute: (id: string, args: object) => Promise<{ isError?: boolean; content: { text: string }[] }> };
+type Tool = { name: string; description: string; execute: (id: string, args: object) => Promise<{ isError?: boolean; content: { text: string }[] }> };
 type Payload = { text?: string; isError?: boolean; isFallbackNotice?: boolean };
 type Dispatch = {
   ctxPayload: { conversation: { id: string }; sender: { id: string } };
@@ -105,7 +105,8 @@ async function final(dispatch: Dispatch, payload: Payload, kind = "final") {
 }
 
 for (const mailbox of [false, true]) test(`phone context distinguishes chat drafting from mailbox provisioning without an email call: ${mailbox}`, async t => {
-  const { contexts, posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async dispatch => {
+  const { contexts, posts } = await run(t, "chat", [{ chat: "home", sender: owner }], async (dispatch, emailTool) => {
+    assert.match(emailTool().description, mailbox ? /^Your own mailbox is configured\./ : /^No own mailbox is configured\./);
     await final(dispatch, { text: "Draft only." });
   }, undefined, undefined, { mailbox });
   const facts = contexts[0].supplemental.channelStructuredContext[0].payload as { emailCapabilities: object };

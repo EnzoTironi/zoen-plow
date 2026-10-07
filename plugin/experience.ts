@@ -88,16 +88,16 @@ async function* cronJobs(gateway: Scheduler, agentId: string) {
 
 const controlKey = Symbol.for("plow.notification.controls");
 const controls = ((globalThis as typeof globalThis & { [controlKey]?: Map<string, Promise<void>> })[controlKey] ??= new Map<string, Promise<void>>());
-export async function notificationControl(gateway: Scheduler, scope: Scope, ctx: Pick<Context, "assertInvocationCurrent" | "sessionKey" | "agentId">, action: "get" | "pause" | "resume", all: boolean, cancelRunning?: (job: z.infer<typeof jobSchema>) => Promise<void>) {
+export async function notificationControl(gateway: Scheduler, scope: Scope, ctx: Pick<Context, "assertInvocationCurrent" | "sessionKey" | "agentId">, action: "get" | "pause" | "resume", all: boolean) {
   const key = scopePath({ ...scope, conversation: "owner" });
   const previous = controls.get(key) ?? Promise.resolve();
-  const operation = previous.catch(() => {}).then(() => applyNotificationControl(gateway, scope, ctx, action, all, cancelRunning));
+  const operation = previous.catch(() => {}).then(() => applyNotificationControl(gateway, scope, ctx, action, all));
   const settled = operation.then(() => {}, () => {});
   controls.set(key, settled);
   void settled.then(() => { if (controls.get(key) === settled) controls.delete(key); });
   return await operation;
 }
-async function applyNotificationControl(gateway: Scheduler, scope: Scope, ctx: Pick<Context, "assertInvocationCurrent" | "sessionKey" | "agentId">, action: "get" | "pause" | "resume", all: boolean, cancelRunning?: (job: z.infer<typeof jobSchema>) => Promise<void>) {
+async function applyNotificationControl(gateway: Scheduler, scope: Scope, ctx: Pick<Context, "assertInvocationCurrent" | "sessionKey" | "agentId">, action: "get" | "pause" | "resume", all: boolean) {
   ctx.assertInvocationCurrent();
   if (action === "get") {
     const state = await readExperience(scope);
@@ -124,7 +124,6 @@ async function applyNotificationControl(gateway: Scheduler, scope: Scope, ctx: P
         if (recorded?.pendingDefinition && isDeepStrictEqual(recorded.pendingDefinition, disabledDefinition(current))) {
           await recordSuspended(scope, { id: current.id, revision: current.configRevision });
         }
-        if (recorded) await cancelRunning?.(current);
         continue;
       }
       await recordSuspended(scope, { id: current.id, revision: current.configRevision, pendingDefinition: disabledDefinition(current) });
@@ -132,7 +131,6 @@ async function applyNotificationControl(gateway: Scheduler, scope: Scope, ctx: P
       const updated = jobSchema.parse(await gateway.request("cron.update", { id: job.id, expectedConfigRevision: current.configRevision, patch: { enabled: false } }));
       if (!updated.configRevision) throw new Error("Scheduler did not confirm the disabled revision");
       await recordSuspended(scope, { id: job.id, revision: updated.configRevision });
-      await cancelRunning?.(current);
     }
   } else {
     // An accepted enable may lose its response. Open the requested gate first
@@ -189,7 +187,7 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
     const current = (await readExperience(scope)).personality;
     if (["get", "preview"].includes(args.action)) {
       const sliders = personalitySchema.parse({ ...scope.account.personalityDefaults, ...current, ...(args.action === "preview" ? args.sliders : {}) });
-      return { saved: !!current, sliders, preview: personalityInstructions(sliders) };
+      return { saved: args.action === "get" && !!current, sliders, preview: personalityInstructions(sliders) };
     }
     if (args.action === "set" && !args.sliders) throw new Error("Supply personality slider values");
     const state = await updateExperience(scope, ctx.assertInvocationCurrent, value => {
@@ -289,19 +287,7 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
       };
     };
     try {
-      const state = await notificationControl(gateway, scope, ctx, args.action, args.scope === "all", async job => {
-        phase = "cancel_active_runs"; schedulerMethod = undefined;
-        const sessionKey = job.owner?.sessionKey ?? job.sessionKey;
-        if (!sessionKey) return;
-        const binding = { sessionKey, agentId: ctx.agentId };
-        const runs = await api.runtime.tasks.async.runs.bindSession(binding).list();
-        for (const run of runs) if (run.sourceId === job.id || run.sourceId === `cron:${job.id}`) {
-          if (!["queued", "running", "waiting", "blocked"].includes(run.status)) continue;
-          ctx.assertInvocationCurrent();
-          const result = await api.runtime.tasks.runs.bindSession(binding).cancel({ taskId: run.id, cfg: ctx.config! });
-          if (!result.cancelled) throw new Error("The job is disabled but its active run could not be cancelled; check task status before confirming a complete stop");
-        }
-      });
+      const state = await notificationControl(gateway, scope, ctx, args.action, args.scope === "all");
       return await present(state, true);
     } catch (error) {
       if (args.action === "get") throw error;
@@ -317,14 +303,9 @@ export function installExperienceTools(api: OpenClawPluginApi, accountFor: (ctx:
     if (ctx.agentId === "plow-worker" && !["web_search", "web_fetch"].includes(event.toolName)) return { block: true, blockReason: "Background workers perform read-only research and analysis; the conversational agent owns messages, memory, scheduling and mutations" };
     if (event.toolName === "sessions_spawn" && (event.params?.agentId !== "plow-worker" || (event.params?.runtime && event.params.runtime !== "subagent"))) return { block: true, blockReason: "Delegate bounded research/analysis to agentId=plow-worker using the native subagent runtime" };
     const cronId = ctx.sessionKey?.match(/^agent:[^:]+:cron:([^:]+)/)?.[1];
-    if (cronId && ["message", "plow_reply_to", "plow_send_email", "plow_start_thread"].includes(event.toolName)
+    if (cronId && ["message", "plow_reply_to", "plow_send_email", "plow_start_thread", "plow_notifications"].includes(event.toolName)
       && !(event.toolName === "plow_send_email" && event.params?.action === "list")) {
-      try {
-        const configured = api.config?.channels?.plow as Account | undefined;
-        if (!configured) throw new Error("Plow configuration unavailable");
-        const account = { ...configured, accountId: "chat" };
-        if (await notificationPaused(account, undefined, cronId)) return { block: true, blockReason: "Scheduled notifications are paused in their source, destination or global scope" };
-      } catch { return { block: true, blockReason: "Scheduled notification state cannot be verified; inspect the scheduler before retrying" }; }
+      return { block: true, blockReason: "Return the requested reminder or result as your final text; the scheduler delivers it through the configured route and current notification gate. Do not send messages or inspect/change conversation notification controls from this scheduled run." };
     }
     if (event.toolName !== "automations" || event.params?.action !== "add") return;
     const account = api.config?.channels?.plow as Account | undefined;

@@ -67,6 +67,20 @@ gate, refreshed roster, stable source intent, configured trust choice, and
 current-invocation check. Reuse exported `startThread(account, ctx, callId, args)`
 when your workflow needs that same action.
 
+An extension using the exported `sendText` helper must pass its live invocation
+check through the helper's awaited destination and route preparation:
+
+```ts
+await sendText(ctx.config, destination, text, api.runtime,
+  () => ctx.assertInvocationCurrent());
+```
+
+Checking only before calling `sendText` leaves a cancellation window during
+those awaits. The forwarded check runs again before delivery. It is optional
+for background workflows that have their own durable authorization and recovery
+journal; a tool invocation must always supply it. The helper does not grant
+permission to a destination: the extension still verifies that exact grant.
+
 The [experience tools](../plugin/experience.ts) demonstrate strict schemas,
 scoped state, revisions, and metadata-only audit messages. The
 [delivery guard](../plugin/delivery-guard.ts) demonstrates the per-run unknown
@@ -139,7 +153,8 @@ For explicit silence, return `details: { silent: true }`. That boolean suppresse
 the run's automatic final Plow reply. Explicit tool sends still occur, and the
 next independent run can reply normally. Text mentioning the flag is not a receipt.
 
-For durable sends, only `status: "sent"` confirms delivery. Follow the
+For durable sends, only `status: "sent"` confirms a send, not recipient delivery
+or reading. Follow the
 [SDK receipt contract](base-experience.md#native-extension-apis). Use native
 automations after the scope gate for schedules. A task record does not create a timer.
 

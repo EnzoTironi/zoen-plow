@@ -80,6 +80,10 @@ test("public personality sliders preview without saving, preserve partial edits 
   await personality.execute("change", { action: "set", sliders: { "playful-serious": 100 } });
   const state = (await personality.execute("get", { action: "get" })).details;
   assert.equal(state.sliders["execute-collaborate"], 0); assert.equal(state.sliders["playful-serious"], 100);
+  const changedPreview = (await personality.execute("preview-saved", { action: "preview", sliders: { "playful-serious": 0 } })).details;
+  assert.equal(changedPreview.saved, false);
+  assert.equal(changedPreview.sliders["playful-serious"], 0);
+  assert.equal((await personality.execute("get-after-preview", { action: "get" })).details.sliders["playful-serious"], 100);
   assert.match((await experienceContext(account, room.uid, false)).personality!.guidance, /Base routing, privacy, permissions/);
   await assert.rejects(tool("plow_personality").execute("guest", { action: "set", sliders: { "polite-unfiltered": 100 } }), /owner's main/);
   await assert.rejects(personality.execute("bad", { action: "set", sliders: { "polite-unfiltered": 101 } }));
@@ -393,18 +397,22 @@ test("quiet hours handle midnight and timezone transitions without muting timed 
   assert.equal(quietNow(state, new Date("2026-03-08T16:00:00Z")), false);
 });
 
-test("paused scheduled tool sends are blocked while ordinary replies retain access", async t => {
+test("scheduled turns return final text instead of sending directly; ordinary replies retain access", async t => {
   await fixture(t);
   let hook: any;
   installExperienceTools({ config: { channels: { plow: account } }, registerTool() {}, on(name: string, callback: unknown) { if (name === "before_tool_call") hook = callback; } } as any, () => account);
-  t.mock.method(scheduler, "request", async () => ({ id: "job", enabled: true, sessionKey: "agent:main:plow:chat:group:cht_room", delivery: { channel: "plow", to: home.uid, accountId: "chat" } }));
   const context = { agentId: "main", sessionKey: "agent:main:cron:job:run:fixture" };
-  assert.equal(await hook({ toolName: "message", params: {} }, context), undefined);
-  await updateExperience({ account, conversation: room.uid }, () => {}, state => { state.paused = true; });
-  assert.equal((await hook({ toolName: "message", params: {} }, context)).block, true);
-  assert.equal(await hook({ toolName: "message", params: {} }, { ...context, sessionKey: "agent:main:main" }), undefined);
-  t.mock.method(scheduler, "request", async () => { throw new Error("scheduler offline"); });
-  assert.equal((await hook({ toolName: "message", params: {} }, context)).block, true);
+  for (const paused of [false, true]) {
+    await updateExperience({ account, conversation: room.uid }, () => {}, state => { state.paused = paused; });
+    for (const toolName of ["message", "plow_reply_to", "plow_start_thread", "plow_send_email", "plow_notifications"]) {
+      const denial = await hook({ toolName, params: {} }, context);
+      assert.equal(denial.block, true);
+      assert.match(denial.blockReason, /final text.*scheduler delivers/i);
+      assert.equal(await hook({ toolName, params: {} }, { ...context, sessionKey: "agent:main:main" }), undefined);
+    }
+    assert.equal(await hook({ toolName: "plow_send_email", params: { action: "list" } }, context), undefined);
+    assert.equal(await hook({ toolName: "web_fetch", params: {} }, context), undefined);
+  }
 });
 
 test("globally paused phone rooms report the gate without exposing private owner state", async t => {
@@ -422,8 +430,9 @@ test("globally paused phone rooms report the gate without exposing private owner
 test("manifest persona composition retains base policy and existing explicit defaults", async t => {
   const { root } = await fixture(t);
   const definition = agentDefinitionSchema.parse({ version: 1, persona: { role: "Tutor", purpose: "Teach clearly", voice: "Warm", examples: ["User: I am stuck. Agent: Let's try one step."] }, defaults: { groupMode: "helper" } });
-  const prompt = composePrompt(await readFile(new URL("../prompt/BASE.md", import.meta.url), "utf8"), "legacy", definition);
-  assert.match(prompt, /Tutor/); assert.match(prompt, /Base behavior governs/); assert.doesNotMatch(prompt, /legacy/);
+  const base = await readFile(new URL("../prompt/BASE.md", import.meta.url), "utf8");
+  const prompt = composePrompt(base, "legacy", definition);
+  assert.match(prompt, /Tutor/); assert.ok(prompt.startsWith(base)); assert.doesNotMatch(prompt, /legacy/);
   assert.ok((await renderPrompt(prompt, null, "fixture")).length < 20_000);
   const manifest = join(root, "agent.json"); await writeFile(manifest, JSON.stringify({ ...definition, version: 2 }));
   await assert.rejects(agentDefinition(manifest));

@@ -23,8 +23,29 @@ docker run --rm --user root --network none \
 
 Each `PASS` records an observed native effect. A failed assertion exits nonzero.
 The fixture shuts down the gateway and removes its temporary state afterward.
+Set `PLOW_ACCEPTANCE_OUTPUT=/PATH/report.json` inside the container, with a
+writable mounted parent directory, to preserve the checks, outbound effects,
+selected model requests and final log tail. A failed run also writes its partial
+report. Keep separate paths for before and after candidates.
 Model responses are deterministic fixtures; this checks integration behavior,
 not the quality of a real model's reasoning or tone.
+
+The detached reminder also attempts a conversation-scoped notification lookup
+and a direct send. Both native guard receipts must give final-text/scheduler
+delivery guidance; the reminder must still deliver exactly once. Heartbeat
+enrollment is checked with the pinned resolver in `heartbeat-enrollment.test.ts`;
+the gateway's worker cases prove that excluding a worker from periodic heartbeat
+enrollment preserves its actual native spawn and completion behavior.
+
+Safety notices exercise their native system-event and heartbeat paths. The
+fallback control cancels a primary alert through an independent fixture send
+policy while all notification scopes are open; it must produce one notice.
+Separate source and destination pauses must suppress that notice. The
+auto-disable case records nine real native failures, interrupts the tenth
+provider request by terminating only the fixture gateway, then waits for the
+asynchronous startup repair to disable the job. General gateway readiness alone
+does not establish completion of that repair. Both the allowed and paused
+creator cases inspect the resulting native notice.
 
 ## Inspect the personality page
 

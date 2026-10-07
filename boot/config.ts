@@ -16,6 +16,8 @@ export type Identity = {
 
 export function renderConfig(identity: Identity, apiBase: string, definition: AgentDefinition = agentDefinitionSchema.parse({ version: 1 })) {
   const extensions = definition.plugins;
+  const extensionEntries = Object.fromEntries(extensions.map(value => [value.id,
+    { enabled: true, hooks: { allowConversationAccess: value.conversationAccess } }]));
   const threadTrust = process.env.PLOW_THREAD_TRUST ?? definition.defaults.threadTrust;
   if (threadTrust !== "ask" && threadTrust !== "trusted" && threadTrust !== "untrusted") {
     throw new Error("PLOW_THREAD_TRUST must be ask, trusted, or untrusted");
@@ -60,15 +62,16 @@ export function renderConfig(identity: Identity, apiBase: string, definition: Ag
       // Model params must not become a legacy model-selection allowlist.
       modelPolicy: {},
       models: { "plow/z-ai/glm-5.2": { params: { extraBody: { reasoning: { enabled: false } } } } },
-      heartbeat: { target: "plow", to: "plow-heartbeat", accountId: "chat" },
+      heartbeat: { agentId: "main", target: "plow", to: "plow-heartbeat", accountId: "chat" },
+      compaction: { memoryFlush: { enabled: false } },
     } },
     mcp: { sessionIdleTtlMs: 300_000, ...(identity.mcp_url ? { servers: { plow: {
       url: "http://127.0.0.1:18790/mcp", transport: "streamable-http",
       headers: { Authorization: "Bearer ${PLOW_MCP_BRIDGE_TOKEN}" },
     } } } : {}) },
     plugins: { load: { paths: ["/opt/plow/plugin", ...extensions.map(value => value.path)] },
-      entries: { plow: { enabled: true }, ...Object.fromEntries(extensions.map(value => [value.id,
-        { enabled: true, hooks: { allowConversationAccess: value.conversationAccess } }])) } },
+      entries: { plow: { enabled: true }, ...extensionEntries,
+        "memory-core": { ...extensionEntries["memory-core"], config: { dreaming: { enabled: false } } } } },
     messages: { visibleReplies: "automatic", queue: { mode: "collect" }, inbound: { byChannel: { plow: 2000 } } },
     channels: { plow: {
       apiBase, lineUid: identity.line.uid, threadTrust, guestTools, groupMode: definition.defaults.groupMode,
@@ -84,7 +87,7 @@ export function renderConfig(identity: Identity, apiBase: string, definition: Ag
     commands: { ownerAllowFrom: ["plow-owner"] },
     memory: { search: { rememberAcrossConversations: false } },
     // An empty allowlist means unrestricted in OpenClaw.
-    skills: { load: { extraDirs: ["/opt/plow/skills", ...definition.skills] }, allowBundled: ["plow-no-bundled-skills"] },
+    skills: { load: { extraDirs: ["/opt/plow/skills", ...definition.skills] }, allowBundled: ["plow-no-bundled-skills"], workshop: { autonomous: { mode: "off" } } },
     // Keep workspace and durable memory writes local instead of routing them through the Mac relay.
     tools: { media: { image: { enabled: true, maxBytes: 8 * 1024 * 1024, timeoutSeconds: 45 }, audio: { enabled: false }, video: { enabled: false } }, message: { crossContext: { allowWithinProvider: false, allowAcrossProviders: false } }, profile: "messaging", toolSearch: false, sessions: { visibility: "tree" }, alsoAllow: ["automations", "read", "write", "edit", "exec", "sessions_spawn", "subagents", "web_search", "web_fetch", "plow_start_thread", "plow_set_thread_trust", "plow_reply_to", "plow_send_email", "plow_preferences", "plow_personality", "plow_memory", "plow_room", "plow_tasks", "plow_notifications", ...guestTools, ...extensions.flatMap(value => value.tools)], deny: ["ask_user"] },
   };
@@ -175,6 +178,20 @@ export async function syncConfig(
   const skills = parentAt(owner, ["skills", "load", "extraDirs"], true)!;
   skills.extraDirs = [...new Set([...rendered.skills.load.extraDirs, ...(Array.isArray(skillDirs) ? skillDirs : [])])];
   seedExtensions(owner, rendered.plugins.entries);
+  // Scoped Plow state has its own retention and revision controls. Native maintenance
+  // must be an explicit choice rather than an implicit transcript/skill write path.
+  for (const path of [
+    ["plugins", "entries", "memory-core", "config", "dreaming", "enabled"],
+    ["agents", "defaults", "compaction", "memoryFlush", "enabled"],
+    ["skills", "workshop", "autonomous", "mode"],
+  ]) {
+    let value: unknown = owner;
+    for (const key of path) {
+      if (isObject(value) && value.$include !== undefined) break;
+      value = isObject(value) ? value[key] : undefined;
+    }
+    if (value === undefined) parentAt(owner, path, true)![path.at(-1)!] = getPath(seed, path);
+  }
   for (const [file, path] of ownedPaths) {
     const value = getPath(seed, path);
     const parent = parentAt(owner, path, value !== undefined);
@@ -201,7 +218,14 @@ export async function syncConfig(
   }
   const heartbeat = defaults?.heartbeat;
   if (defaults && (heartbeat === undefined || (isObject(heartbeat) && (heartbeat.target ?? "owner") === "owner"))) {
-    defaults.heartbeat = { ...(isObject(heartbeat) ? heartbeat : {}), ...rendered.agents.defaults.heartbeat };
+    const migratedHeartbeat: Record<string, unknown> = { ...(isObject(heartbeat) ? heartbeat : {}), ...rendered.agents.defaults.heartbeat };
+    if (isObject(heartbeat) && heartbeat.agentId !== undefined) migratedHeartbeat.agentId = heartbeat.agentId;
+    defaults.heartbeat = migratedHeartbeat;
+  }
+  // Native default enrollment otherwise includes the read-only worker too.
+  // Preserve an explicit agent choice and the owner's route/cadence.
+  if (defaults && isObject(defaults.heartbeat) && defaults.heartbeat.agentId === undefined) {
+    defaults.heartbeat.agentId = "main";
   }
   const bindingPath = join(includeDir, "binding.json5");
   const channelBindingPath = join(includeDir, "channel-binding.json5");

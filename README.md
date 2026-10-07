@@ -286,7 +286,8 @@ To ask the owner privately from a group, a variant plugin tool can use
 `api.runtime.channel.session.updateLastRoute` (`createIfMissing: true`). Pass
 `session: buildOutboundSessionContext({ cfg, ...route, conversationType: "direct" })`,
 `mirror: { agentId: route.agentId, sessionKey: route.sessionKey }` and
-`skipQueue: true`, as `plow_reply_to` does. Only `status: "sent"` confirms delivery.
+`skipQueue: true`, as `plow_reply_to` does. Only `status: "sent"` confirms a send;
+it does not prove recipient delivery or reading.
 Keep the destination fixed in code, quote and cap member text, and keep routing
 in the variant's existing records, not in owner-visible text. This sends and
 mirrors an assistant message; it must not dispatch member text as an owner turn.

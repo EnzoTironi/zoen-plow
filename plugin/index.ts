@@ -1,5 +1,6 @@
 import { startDeliveryRun, finishDeliveryRun, deliveryRunIsUnknown, deliveryRunIsSilent, installDeliveryGuard } from "./delivery-guard.ts";
 import { setTimeout as delay } from "node:timers/promises";
+import { z } from "zod";
 import { defineChannelPluginEntry, type ChannelPlugin, type PluginRuntime, type OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageReplyPipeline, buildOutboundSessionContext, sendDurableMessageBatch, resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -20,8 +21,9 @@ let runtime: PluginRuntime;
 // The pinned runtime keeps direct replies audible: an email turn that ends with NO_REPLY can come
 // back as its no-reply fallback, which on email means there is nothing for the owner.
 const NO_REPLY_FALLBACK = "⚠️ OpenClaw couldn't produce or deliver a reply.";
+const cronNoticeSchema = z.object({ version: z.literal(1), sources: z.array(z.tuple([z.string().trim().min(1), z.string().trim().min(1)])).min(1).max(1000) }).strict();
 
-async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], guard?: { signal?: AbortSignal; deliveryQueueId?: string; assertInvocationCurrent?: () => void; assertDirectAdapterHandoff?: () => void; onPlatformSendDispatch?: () => Promise<void> }) {
+async function send(account: Account, to: string, text: string, mediaUrls: string[] = [], guard?: { signal?: AbortSignal; deliveryQueueId?: string; scheduledCronIds?: readonly string[]; assertInvocationCurrent?: () => void; assertDirectAdapterHandoff?: () => void; onPlatformSendDispatch?: () => Promise<void> }) {
   guard?.signal?.throwIfAborted();
   to = to.replace(/^plow:/i, "");
   if (account.accountId === "email") throw new Error("Email is sent with plow_send_email, not message.");
@@ -34,13 +36,19 @@ async function send(account: Account, to: string, text: string, mediaUrls: strin
   }
   if (to === "plow-owner" || heartbeat) to = (await ownerChat(account)).uid;
   if (heartbeat && (await readExperience({ account, conversation: to })).paused) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
-  // This versioned intent prefix is a pinned 2026.9.6 cron contract. The real
-  // gateway acceptance test covers it so an upstream change cannot remove the
-  // pause gate silently. Ordinary inbound replies have a different intent.
-  const scheduled = guard?.deliveryQueueId?.startsWith("cron-direct-delivery:v1:") === true;
-  const cronId = scheduled ? guard?.deliveryQueueId?.match(/^cron-direct-delivery:v1:cron:([^:]+):\d+:/)?.[1] : undefined;
-  if (scheduled && !cronId) throw new Error("Scheduled delivery provenance cannot be verified");
-  const paused = async () => await notificationPaused(account, to, cronId);
+  // Results and failure alerts retain explicit cron provenance through the
+  // pinned durable queue. Ordinary inbound replies have a different intent.
+  const intent = guard?.deliveryQueueId;
+  const scheduled = intent?.startsWith("cron-direct-delivery:v1:") === true || intent?.startsWith("plow-cron-alert:v1:") === true || guard?.scheduledCronIds !== undefined;
+  const cronId = intent?.match(/^cron-direct-delivery:v1:cron:([^:]+):\d+:/)?.[1]
+    ?? intent?.match(/^plow-cron-alert:v1:([^:]+):\d+$/)?.[1];
+  const cronIds = [...new Set([...(guard?.scheduledCronIds ?? []), ...(cronId ? [cronId] : [])])];
+  if (scheduled && !cronIds.length) throw new Error("Scheduled delivery provenance cannot be verified");
+  const paused = async () => {
+    if (await notificationPaused(account, to)) return true;
+    for (const id of cronIds) if (await notificationPaused(account, to, id)) return true;
+    return false;
+  };
   if (scheduled && await paused()) return { channel: "plow" as const, messageId: "", outcome: "not_sent" as const };
   const chat = await request<Chat>(account, `/chats/${to}`);
   if (chat.participants.some(p => p.type === "agent" && p.relationship === "self" && p.line.uid === account.emailLineUid)) {
@@ -110,12 +118,13 @@ async function durableSend(cfg: OpenClawConfig, route: { agentId: string; sessio
 
 // Image-installed plugins use the same channel, session mirror and durable
 // delivery path as native Plow tools. Authorization belongs to their workflow.
-export async function sendText(cfg: OpenClawConfig, to: string, text: string, channelRuntime: PluginRuntime): Promise<{ messageId: string }> {
+export async function sendText(cfg: OpenClawConfig, to: string, text: string, channelRuntime: PluginRuntime, assertCurrent?: () => void): Promise<{ messageId: string }> {
+  assertCurrent?.();
   const account = plugin.config.resolveAccount(cfg, "chat");
   const chat = await request<Chat>(account, `/chats/${encodeURIComponent(to)}`);
   if (!accepts(account, chat)) throw new Error("Plow account does not serve this conversation");
   const { kind, route, routeTo } = sessionRoute(cfg, account, chat, channelRuntime);
-  const messageId = await durableSend(cfg, route, "chat", chat.uid, routeTo, text, kind, { channelRuntime });
+  const messageId = await durableSend(cfg, route, "chat", chat.uid, routeTo, text, kind, { channelRuntime, assertCurrent });
   if (!messageId) throw new DeliveryUnknownError();
   return { messageId };
 }
@@ -340,9 +349,17 @@ const plugin: ChannelPlugin<Account> = {
   },
   outbound: {
     deliveryMode: "direct",
-    deliveryCapabilities: { durableFinal: { text: true, media: true, messageSendingHooks: true } },
+    deliveryCapabilities: { durableFinal: { text: true, media: true, payload: true, messageSendingHooks: true } },
     sendText: ctx => (resolveOutboundSendDep<typeof send>(ctx.deps, "plow") ?? send)(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, [], ctx),
     sendMedia: ctx => send(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text, ctx.mediaUrl ? [ctx.mediaUrl] : [], ctx),
+    sendPayload: ctx => {
+      // Native pending-final identity owns recovery. Notice provenance travels
+      // independently in persisted channelData and reaches the same send gate.
+      const scheduledCronIds = Object.hasOwn(ctx.payload.channelData ?? {}, "plowCronNotice")
+        ? cronNoticeSchema.parse(ctx.payload.channelData?.plowCronNotice).sources.map(([id]) => id) : undefined;
+      return (resolveOutboundSendDep<typeof send>(ctx.deps, "plow") ?? send)(plugin.config.resolveAccount(ctx.cfg, ctx.accountId), ctx.to, ctx.text,
+        ctx.payload.mediaUrls ?? (ctx.payload.mediaUrl ? [ctx.payload.mediaUrl] : []), { ...ctx, scheduledCronIds });
+    },
   },
 };
 
@@ -510,7 +527,7 @@ export default defineChannelPluginEntry({
       }
       return {
         name: "plow_send_email", label: "Send email from your Plow mailbox",
-        description: `Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. The tool adds a footer naming you as the owner's AI assistant on Plow; sign however you like. A requested chat draft is text, not a send; do not call this tool for it. Missing mailbox provisioning blocks sending and receiving, not drafting. Use the requested sender identity and respect excluded accounts. Mail in the owner's own name needs their requested account and approval in chat. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
+        description: `${cfg && plugin.config.resolveAccount(cfg, "chat").emailLineUid ? "Your own mailbox is configured." : "No own mailbox is configured. Sending and listing are unavailable; drafting in this chat is available."} Send email from your own mailbox, or list your email threads. To reply in a thread, set to to its chat uid (cht_…); to start a new thread, set to to a list of email addresses and give a subject. body is the email itself, from you as the owner's assistant: refer to the owner in the third person, even for 'from me' or an approved draft. The tool adds a footer naming you as the owner's AI assistant on Plow; sign however you like. A requested chat draft is text, not a send; do not call this tool for it. Missing mailbox provisioning blocks sending and receiving, not drafting. Use the requested sender identity and respect excluded accounts. Mail in the owner's own name needs their requested account and approval in chat. Returns the thread's chat_uid. Your final text in an email thread goes privately to the owner, never to the thread.`,
         parameters: {
           type: "object", additionalProperties: false,
           properties: {

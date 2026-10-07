@@ -12,6 +12,15 @@ runtime tests use the SDK shipped in the pinned image. The plugin is an npm
 workspace: CI and the image use the root lock, with development, peer and optional
 dependencies omitted from the image install.
 
+`tests/native-maintenance.test.ts` calls the pinned dreaming resolver, Workshop
+job projection and actual memory plugin's registered flush-plan resolver. It
+verifies off/disabled results without executing a model, filesystem maintenance
+or plugin lifecycle hook. Config fixtures separately cover fresh and legacy
+defaults, explicit choices, opaque includes and idempotent restart. Actual
+gateway startup/restart must also confirm that dreaming jobs are absent and
+Workshop declarations are disabled. Existing workspace copies require a separate
+inventory; a disabled future writer is not evidence of erasure.
+
 ```sh
 npm ci
 docker build -t plow-openclaw:test .
@@ -101,7 +110,7 @@ history older than `plow-listening-since` stays unanswered.
 
 ## Experience acceptance
 
-The build applies `patch-runtime.ts` to two checksum-verified 2026.9.6 modules.
+The build applies `patch-runtime.ts` to six checksum-verified 2026.9.6 modules.
 The outbound patch retains the durable intent ID in Plow adapter context even when exact
 provider reconciliation is not required. This lets the adapter distinguish cron
 delivery from inbound replies for pause enforcement. It does not enable provider
@@ -114,6 +123,80 @@ for native subagents in the reserved `plow-worker` session namespace. The
 coordinator acknowledges cancellation; native result handoff still runs. Other
 workers and task runtimes retain their notification policy. Runtime and gateway
 tests verify the boundary and reject duplicate cancellation notices.
+
+The tool-surface patch carries the prepared host turn's channel, provider and
+account into native tool construction. A reminder created with
+`sessionTarget="current"` must retain its authenticated source as well as its
+delivery destination. Inferring caller authority from `delivery.channel` would
+cross that boundary; the scheduled-account guard remains unchanged. Acceptance
+creates the reminder through an actual inbound tool invocation and executes that
+job, rather than relying only on an administrator-created scheduler fixture.
+
+The origin-retention patch preserves that creator when only `enabled` changes.
+Without it, a pause/resume through the gateway can reset a valid Plow origin to
+unknown, and a previously accepted reminder later fails the account guard.
+Only the authority-retention comparison normalizes `enabled`; full configuration
+revisions, active-source invalidation and native cancellation are unchanged.
+Changes to the work, tool cap, owner, destination, schedule or trigger still
+require fresh authorization. Native boundary tests check these negative controls,
+and gateway acceptance executes a conversation-created job before and after pause.
+
+The failure-alert patch uses `deliveryIntentId`, not `deliveryQueueId`, to persist
+a versioned job/run identity in a newly created queue entry. A supplied queue ID
+can be replaced by a fresh UUID; it does not select a new durable intent. The native
+target resolves to Plow. This includes `channel="last"` resolving to Plow. The
+adapter gates that alert at physical dispatch using global, destination and
+source-job pause state. Ordinary replies retain their own delivery intent and
+continue during pause. Disabling a job already cancels its active native run;
+the plugin does not enumerate session-owned tasks to discover system-owned cron
+runs. The gateway test holds a provider request, pauses through the owner's
+registered tool, and checks both the abort and suppressed failure announcement.
+
+The safety-notice patch carries selected native `auto-disabled` and
+`failure-alert` system-event job IDs and occurrence IDs into Plow-only persisted
+`channelData`. It copies native reply metadata and leaves the pending-final queue
+ID, completion ID and writer authority unchanged. Replacing that queue ID would
+break restart recovery's lookup of its original delivery owner. A narrow
+`sendPayload` adapter validates the independent notice metadata and passes it to
+the existing physical send gate. This prevents the fallback heartbeat from bypassing the same source-room
+pause. Ordinary and exec heartbeats keep their existing queue behavior. Every
+job in a combined notice is checked; missing jobs or occurrence identity fail
+closed. The native fallback test has an allowed control, distinct notice text
+and no optional frequency throttle, so neither deduplication nor rate limiting
+can disguise a missing pause guard. Queued adapter tests cover multiple sources,
+late pauses, malformed provenance, original completion settlement and replaced
+writer authority. Stable queue custody preserves pending
+recovery; it does not establish indefinite duplicate suppression after acknowledgement.
+
+Scheduled turns also reject direct Plow message sends at the tool boundary.
+Their final text goes through the scheduler's configured delivery route, where
+the pause gate and durable queue apply. The denial explains this path so a
+mistaken tool selection can recover into a useful reminder instead of a false
+authorization failure. Mailbox listing remains a read; ordinary inbound replies
+retain their existing tool access. A job message should repeat the final-text
+instruction because a detached execution does not inherit every detail of its
+creation turn.
+Conversation notification controls also remain outside the detached run: its
+own session is not a verified foreground Plow conversation. The same denial
+explains that the delivery gate is checked by the scheduler/adapter rather than
+asking the job to inspect or change those controls. Ordinary phone requests can
+still inspect, pause and resume them.
+
+Default heartbeat enrollment names `main` explicitly. In this pinned runtime,
+an unspecified agent selector enrolls every agent, including `plow-worker`;
+the worker could then send an unsolicited analysis through the owner's route.
+Boot migration adds `agentId: "main"` only when no selector is present, retaining
+the owner's cadence and route, including `none`, and preserving an explicit
+custom selector. Native resolver tests and the gateway's no-raw-worker assertion
+cover the default enrollment. This is separate from requested worker completion
+and does not disable the main agent's heartbeat.
+
+For every runtime upgrade, review these six source modules against the new
+upstream implementation. Checksums and unique replacement targets fail the
+build on drift; updating only a filename or hash is insufficient. Run the suite,
+offline probe and native gateway acceptance before changing the pin. A fixture
+model proves the tool and transport contract; live model wording has its own
+qualitative review gate.
 
 After the suite and probe, run the real gateway acceptance harness. It uses local
 Plow and model fixtures under `--network none`, tests authenticated personality

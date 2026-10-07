@@ -101,6 +101,18 @@ erase historical transcripts or separately created files/indexes, and it does no
 cancel tasks. Remove those artifacts separately when requested. The base does
 not build another memory index.
 
+Native dreaming, pre-compaction memory flush and autonomous Skill Workshop
+review default to off. They are separate workspace retention/mutation paths,
+not Plow memory operations. Missing settings migrate to off; explicit values
+and opaque owner includes survive. Disabling maintenance does not erase older
+copies. Shared bootstrap files must contain only public agent guidance. If an
+eligible root `MEMORY.md` exists through legacy configuration or deliberate
+opt-in, the pinned runtime can include it in non-owner direct-chat bootstrap.
+This is a conditional source-confirmed path, not an observed disclosure. Group
+bootstrap excludes that file; opt-in requires a separate privacy boundary.
+Private facts belong in the scoped store. See the [prebuilt defaults](default-experience.md)
+and [upgrade procedure](operations-sops.md#sop-5-upgrade-or-roll-back).
+
 Tasks use native managed flows bound to the current session. They distinguish
 queued, running, waiting, succeeded, failed and cancelled states; evidence records
 confirmed, failed or unknown delivery. A completion condition is required at
@@ -111,9 +123,13 @@ validate their domain receipts before finishing. Task records do not schedule a
 wakeup: use native `automations` for explicitly requested future work.
 
 Pause persists the delivery gate first, then disables jobs in the authorized
-scope with native scheduler revisions and cancels matching active native runs. A second
+scope with native scheduler revisions; disabling a job requests its native run's
+cancellation, including an early setup race. A second
 gate at physical cron delivery suppresses output already generating when pause
-was persisted. It uses the pinned runtime's versioned cron intent prefix, covered
+was persisted. Scheduled results and failure alerts retain distinct versioned
+job/run intents through the durable queue. Fallback safety notices carry native
+job and event occurrence identities too. The same gate checks their global,
+destination and source-job pause state; ordinary inbound replies continue. This is covered
 by the real gateway acceptance test.
 Partial failures keep the gate active and report the incomplete stop. A disable
 intent is journaled before the scheduler mutation, so a lost response or revoked

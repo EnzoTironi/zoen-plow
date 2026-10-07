@@ -34,22 +34,26 @@ const guest = { ...owner, uid: "mem_guest", role: "member", display_name: "Lee",
 const self = { type: "agent" as const, relationship: "self", line: { uid: "ln_acceptance", display_name: "Cedar" } };
 const home = { uid: "cht_home", status: "active", trusted: false, participants: [owner, self] };
 const group = { ...home, uid: "cht_group", display_name: "Dinner planning", participants: [owner, guest, self] };
-const chats = [home, group];
+const alertDestination = { ...group, uid: "cht_alert_destination", display_name: "Alert destination" };
+const chats = [home, group, alertDestination];
 const inbound: Message[] = [], outbound: { chat: string; body: string; uid: string }[] = [];
 const typing: { chat: string; action: string }[] = [];
 const modelRequests: Record<string, any>[] = [];
 const callsIssued = new Set<string>();
 const cancelledTasks: string[] = [];
+const safetyOutcomes: object[] = [];
 const evidence: { check: string; result: string }[] = [];
 let child: ChildProcess | undefined, log = "";
+let completed = false, safetyHeartbeatAt = 0, autoDisableInterruptStarted = false;
 let releaseReminder: (() => void) | undefined;
+let cancelReminderClosed = false, cancelReminderStarted = false;
 let releaseWorker: (() => void) | undefined, cancelWorkerClosed = false, workerFinished = false;
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const record = (check: string, result: string) => { evidence.push({ check, result }); console.log(`PASS ${check}: ${result}`); };
 async function until(check: () => boolean | Promise<boolean>, label: string, timeout = 90_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) { if (await check()) return; if (child?.exitCode !== null && child?.exitCode !== undefined) throw new Error(`Gateway exited during ${label}\n${log.slice(-6000)}`); await delay(250); }
-  throw new Error(`Timed out: ${label}\nFixture state: ${JSON.stringify({ cancelWorkerClosed, outbound, callsIssued: [...callsIssued] })}\n${log.slice(-6000)}`);
+  throw new Error(`Timed out: ${label}\nFixture state: ${JSON.stringify({ cancelReminderClosed, cancelWorkerClosed, outbound, callsIssued: [...callsIssued] })}\n${log.slice(-6000)}`);
 }
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://fixture");
@@ -59,8 +63,22 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/v1/chat/completions") {
     modelRequests.push(body);
     const text = JSON.stringify(body.messages);
-    const latestUser = JSON.stringify(body.messages.findLast((message: any) => message.role === "user")?.content ?? "");
+    // The pinned runtime also appends user-role internal context. It can quote
+    // older requests; choose the actual turn instead of treating that as a command.
+    const latestUser = JSON.stringify(body.messages.findLast((message: any) => message.role === "user" && !JSON.stringify(message.content).includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"))?.content ?? "");
+    const scheduled = latestUser.includes("[cron:");
+    if (scheduled && latestUser.includes("AUTO_DISABLED_INTERRUPT")) {
+      autoDisableInterruptStarted = true;
+      await new Promise<void>(resolve => res.once("close", () => resolve())); return;
+    }
+    if (scheduled && latestUser.includes("AUTO_DISABLED_RUN")) { res.statusCode = 400; json({ error: { message: "Fixture permanent model rejection" } }); return; }
+    if (!scheduled && latestUser.includes("AUTO_DISABLED_SAFETY")) safetyHeartbeatAt = Date.now();
+    if (!scheduled && latestUser.includes("SAFETY_FALLBACK_ACCEPTANCE")) safetyHeartbeatAt = Date.now();
     const worker = body.messages.some((message: any) => message.role === "system" && JSON.stringify(message.content).includes("PLOW_EXECUTION_WORKER"));
+    if (scheduled && latestUser.includes("CANCEL_CRON_ACCEPTANCE")) {
+      cancelReminderStarted = true;
+      await new Promise<void>(resolve => { res.once("close", () => { cancelReminderClosed = true; resolve(); }); });
+    }
     if (worker && text.includes("WORKER_HELD")) await new Promise<void>(resolve => { releaseWorker = resolve; });
     if (worker && text.includes("WORKER_CANCEL_HELD")) await new Promise<void>(resolve => { res.once("close", () => { cancelWorkerClosed = true; resolve(); }); });
     if (res.destroyed) return;
@@ -73,18 +91,27 @@ const server = createServer(async (req, res) => {
     const taskList = toolResults.flatMap((result: any) => result.action === "list" ? result.tasks ?? [] : []);
     const activeTask = taskList.findLast((task: any) => task.runtime === "subagent" && ["queued", "running"].includes(task.status));
     const hasResult = (id: string) => callsIssued.has(id);
-    if (!worker && text.includes("WORKER_CANCEL_START") && !hasResult("fixture-worker-cancel")) call = { id: "fixture-worker-cancel", name: "sessions_spawn", arguments: JSON.stringify({ agentId: "plow-worker", task: "WORKER_CANCEL_HELD: Analyze a hypothetical dinner plan; no secrets, messages or mutations.", mode: "run" }) };
+    if (!worker && !scheduled && latestUser.includes("CREATE_REMINDER_ACCEPTANCE") && !hasResult("fixture-create-reminder")) call = { id: "fixture-create-reminder", name: "automations", arguments: JSON.stringify({ action: "add", job: { name: "Created through native tool", sessionTarget: "current", deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, payload: { kind: "agentTurn", message: "REMINDER_ACCEPTANCE: remind Pat to check the dinner plan" } } }) };
+    else if (scheduled && latestUser.includes("SCHEDULED_TOOL_GUARD") && !hasResult("fixture-scheduled-notifications")) call = { id: "fixture-scheduled-notifications", name: "plow_notifications", arguments: JSON.stringify({ action: "get", scope: "conversation", diagnostics: false }) };
+    else if (scheduled && latestUser.includes("SCHEDULED_TOOL_GUARD") && !hasResult("fixture-scheduled-send")) call = { id: "fixture-scheduled-send", name: "plow_reply_to", arguments: JSON.stringify({ chat_uid: home.uid, text: "Duplicate scheduled tool send must be blocked." }) };
+    else if (!worker && !scheduled && latestUser.includes("PAUSE_ACTIVE_CRON_ACCEPTANCE") && !hasResult("fixture-pause-active-cron")) call = { id: "fixture-pause-active-cron", name: "plow_notifications", arguments: JSON.stringify({ action: "pause", scope: "all", diagnostics: false }) };
+    else if (!worker && text.includes("WORKER_CANCEL_START") && !hasResult("fixture-worker-cancel")) call = { id: "fixture-worker-cancel", name: "sessions_spawn", arguments: JSON.stringify({ agentId: "plow-worker", task: "WORKER_CANCEL_HELD: Analyze a hypothetical dinner plan; no secrets, messages or mutations.", mode: "run" }) };
     else if (!worker && text.includes("WORKER_STOP") && !hasResult("fixture-worker-list")) call = { id: "fixture-worker-list", name: "subagents", arguments: JSON.stringify({ action: "list" }) };
     else if (!worker && text.includes("WORKER_STOP") && activeTask && !hasResult("fixture-worker-stop")) call = { id: "fixture-worker-stop", name: "subagents", arguments: JSON.stringify({ action: "cancel", taskId: activeTask.taskId }) };
     else if (!worker && text.includes("WORKER_START") && !hasResult("fixture-worker-start")) call = { id: "fixture-worker-start", name: "sessions_spawn", arguments: JSON.stringify({ agentId: "plow-worker", task: "WORKER_HELD: Compare two hypothetical dinner times, Thursday 7 or Friday 6. Return the analysis with those facts as evidence. No secrets, messages or mutations.", mode: "run" }) };
     // Native tool follow-ups can retain a prior user envelope. Match the later
     // worker phase before that envelope's earlier paused-reply marker.
-    const content = worker ? JSON.stringify({ status: "completed", summary: "Thursday at 7 is one option; Pat still needs to confirm.", evidence: ["The assignment supplies Thursday 7 and Friday 6 as options."] })
+    const content = scheduled && latestUser.includes("SCHEDULED_TOOL_GUARD") ? (body.messages.some((message: any) => message.role === "tool" && JSON.stringify(message.content).includes("Return the requested reminder or result as your final text")) ? "Reminder: check the train timetable." : "Scheduled send guard did not return its delivery instruction.")
+      : !scheduled && latestUser.includes("AUTO_DISABLED_SAFETY") ? (latestUser.includes("AUTO_DISABLED_SAFETY_PAUSED") ? "Auto-disabled notice from the paused source room." : "Auto-disabled notice from the unpaused source room.")
+      : !scheduled && latestUser.includes("SAFETY_FALLBACK_ACCEPTANCE") ? (latestUser.includes("SAFETY_FALLBACK_ACCEPTANCE_DESTINATION") ? "Safety notice for the paused destination." : latestUser.includes("SAFETY_FALLBACK_ACCEPTANCE_PAUSED") ? "Safety notice from the paused source room." : "Safety notice from the unpaused source room.")
+      : worker ? JSON.stringify({ status: "completed", summary: "Thursday at 7 is one option; Pat still needs to confirm.", evidence: ["The assignment supplies Thursday 7 and Friday 6 as options."] })
       : text.includes("WORKER_STOP") ? "Cancelled the background analysis."
       : text.includes("WORKER_CANCEL_START") ? "Started the next background analysis."
       : text.includes("WORKER_PING") && !workerFinished ? "I'm here. The background analysis is still running."
       : workerFinished && text.includes("WORKER_START") ? "The analysis is ready: Thursday at 7 is one option; Pat still needs to confirm."
       : text.includes("WORKER_START") ? "Started the background analysis."
+      : !scheduled && latestUser.includes("PAUSE_ACTIVE_CRON_ACCEPTANCE") ? (toolResults.some(result => result.status === "complete" && result.scheduledDeliveryHere === "paused") ? "Scheduled notifications are paused; direct replies still work." : "Notification pause did not complete.")
+      : !scheduled && latestUser.includes("CREATE_REMINDER_ACCEPTANCE") ? "Created the reminder in this conversation."
       : latestUser.includes("PAUSED_REPLY_ACCEPTANCE") ? "Direct replies still work while reminders are paused."
       : text.includes("REMINDER_ACCEPTANCE") ? "Reminder: check the dinner plan."
       : text.includes("coordinate dinner") ? "Thursday at 7 works. I still need Pat's confirmation."
@@ -121,6 +148,15 @@ const account: Account = { accountId: "chat", apiBase, lineUid: self.line.uid };
 const definition = agentDefinitionSchema.parse({ version: 1, persona: { role: "Dinner coordinator", purpose: "Find a shared dinner time", voice: "Warm and direct", sliders: { "playful-serious": 80 } } });
 const uiOrigin = process.env.PLOW_ACCEPTANCE_ORIGIN ?? "http://localhost:3001";
 const cfg = renderConfig({ agent: { name: "Cedar", web_url: uiOrigin }, line: self.line, chats }, apiBase, definition);
+// A separate send policy cancels only the primary alert destination. This
+// produces a proven not-sent fallback without pausing its scopes or introducing
+// provider uncertainty, which correctly prohibits a blind fallback/replay.
+const noticePolicy = join(root, "notice-policy");
+await mkdir(noticePolicy);
+await writeFile(join(noticePolicy, "openclaw.plugin.json"), JSON.stringify({ id: "acceptance-notice-policy", configSchema: { type: "object", additionalProperties: false } }));
+await writeFile(join(noticePolicy, "index.mjs"), `export default { id: "acceptance-notice-policy", register(api) { api.on("message_sending", event => event.to === "${alertDestination.uid}" ? { cancel: true } : undefined); } };\n`);
+cfg.plugins.load.paths.push(noticePolicy);
+cfg.plugins.entries["acceptance-notice-policy"] = { enabled: true, hooks: { allowConversationAccess: true } };
 cfg.agents.defaults.workspace = join(root, "workspace");
 cfg.agents.entries["plow-worker"].workspace = join(root, "workspace-worker");
 await mkdir(cfg.agents.defaults.workspace);
@@ -131,12 +167,13 @@ await syncConfig(cfg, process.env.OPENCLAW_CONFIG_PATH, root);
 const auth = { Authorization: `Bearer ${process.env.OPENCLAW_GATEWAY_PASSWORD}` };
 const url = "http://127.0.0.1:3000/plugins/plow/personality/api";
 const rpc = (method: string, params: Record<string, unknown>) => callGatewayFromCli(method, { url: "ws://127.0.0.1:3000", password: process.env.OPENCLAW_GATEWAY_PASSWORD, timeout: "10000", json: true }, params, { scopes: ["operator.admin"] });
-async function start() {
+async function start(afterIntentionalCrash = false) {
   log = "";
   child = spawn(process.execPath, ["/app/openclaw.mjs", "gateway"], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout?.on("data", value => { log = (log + value.toString()).slice(-128_000); });
   child.stderr?.on("data", value => { log = (log + value.toString()).slice(-128_000); });
   await until(() => healthy(), "gateway readiness");
+  if (afterIntentionalCrash && log.includes("restart-loop breaker tripped")) await rpc("channels.start", { channel: "plow" });
   await until(() => ws.clients.size > 0, "Plow fixture connection");
   await until(async () => { try { await readFile(join(root, "plow-checkpoints", group.uid)); return true; } catch { return false; } }, "Plow history initialization");
 }
@@ -188,6 +225,47 @@ try {
 
   const context = { sessionKey: "agent:main:main", agentId: "main", assertInvocationCurrent() {} };
   const scope = { account, conversation: home.uid };
+  await message(home.uid, "CREATE_REMINDER_ACCEPTANCE: remind me to check the dinner plan in an hour", owner);
+  let created: any;
+  await until(async () => {
+    const result: any = await rpc("cron.list", { includeDisabled: true });
+    created = result.jobs.find((value: any) => value.name === "Created through native tool");
+    return !!created;
+  }, "automation created by the native tool from an authenticated owner turn");
+  const createdView: any = await rpc("cron.get", { id: created.id });
+  assert.equal(createdView.owner.accountId, "chat");
+  const beforeCreatedRun = outbound.filter(value => value.body.startsWith("Reminder:")).length;
+  await rpc("cron.run", { id: created.id, mode: "force" });
+  await until(() => outbound.filter(value => value.chat === home.uid && value.body.startsWith("Reminder:")).length === beforeCreatedRun + 1, "captured chat account executes and delivers the tool-created reminder");
+  await until(async () => ((await rpc("cron.runs", { id: created.id, limit: 10 })) as any).entries?.some((entry: any) => entry.action === "finished" && entry.status === "ok"), "tool-created reminder run completion");
+  await notificationControl(scheduler, scope, context, "pause", false);
+  assert.equal((await rpc("cron.get", { id: created.id }) as any).enabled, false);
+  await notificationControl(scheduler, scope, context, "resume", false);
+  assert.equal((await rpc("cron.get", { id: created.id }) as any).enabled, true);
+  await rpc("cron.run", { id: created.id, mode: "force" });
+  await until(() => outbound.filter(value => value.chat === home.uid && value.body.startsWith("Reminder:")).length === beforeCreatedRun + 2, "pause/resume preserves the creator's authenticated account for the next run");
+  await until(async () => ((await rpc("cron.runs", { id: created.id, limit: 10 })) as any).entries?.filter((entry: any) => entry.action === "finished" && entry.status === "ok").length === 2, "resumed tool-created reminder run completion");
+  await rpc("cron.remove", { id: created.id });
+  record("native automation creation and execution", "authenticated inbound creation preserves Plow origin and chat account; each forced run delivers once, including after pause/resume");
+  const guarded: any = await rpc("cron.add", { name: "Scheduled send guard", agentId: "main", sessionKey: "agent:main:main", enabled: true,
+    schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, sessionTarget: "isolated", deleteAfterRun: false,
+    payload: { kind: "agentTurn", message: "SCHEDULED_TOOL_GUARD: check the train timetable." },
+    delivery: { mode: "announce", channel: "plow", to: home.uid, accountId: "chat" } });
+  const guardBefore = outbound.length;
+  await rpc("cron.run", { id: guarded.id, mode: "force" });
+  await until(() => outbound.slice(guardBefore).some(value => value.body === "Reminder: check the train timetable."), "native scheduled send denial redirects the final text through scheduler delivery");
+  for (const id of ["fixture-scheduled-notifications", "fixture-scheduled-send"]) {
+    // The pinned provider normalizes these call IDs to alphanumeric strings.
+    const result = modelRequests.flatMap(value => value.messages).find((value: any) => value.role === "tool" && value.tool_call_id === id.replaceAll("-", ""));
+    assert.ok(result, `native denial receipt exists for ${id}`);
+    assert.match(JSON.stringify(result.content), /Return the requested reminder or result as your final text/);
+    assert.match(JSON.stringify(result.content), /scheduled|scheduler/i);
+  }
+  assert.ok(!outbound.some(value => value.body.includes("Duplicate scheduled tool send")));
+  assert.equal(outbound.slice(guardBefore).filter(value => value.body === "Reminder: check the train timetable.").length, 1);
+  await rpc("cron.remove", { id: guarded.id });
+  record("scheduled tool send guard", "detached notification lookup and direct send both return native denials with final-text/scheduler guidance; the scheduler delivers one useful reminder");
+
   const job: any = await rpc("cron.add", { name: "Acceptance reminder", agentId: "main", sessionKey: context.sessionKey, enabled: true, deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "REMINDER_ACCEPTANCE: remind Pat to check the dinner plan", toolsAllow: [] }, delivery: { mode: "announce", channel: "plow", to: home.uid, accountId: "chat" } });
   for (const fault of ["lost disable response", "revoked invocation"] as const) {
     let revoked = false;
@@ -253,9 +331,10 @@ try {
   record("restart and backup restoration", "personality, pause state, delivery checkpoints and disabled scheduler job survive a full-state backup/restore and gateway restart");
   await notificationControl(scheduler, scope, context, "resume", false);
   assert.equal((await rpc("cron.get", { id: job.id }) as any).enabled, true);
+  const remindersBefore = outbound.filter(value => value.chat === home.uid && value.body.startsWith("Reminder:")).length;
   await rpc("cron.run", { id: job.id, mode: "force" });
-  await until(() => outbound.some(value => value.chat === home.uid && value.body.includes("Reminder:")), "scheduled model execution and phone delivery");
-  assert.equal(outbound.filter(value => value.chat === home.uid).length, 1);
+  await until(() => outbound.filter(value => value.chat === home.uid && value.body.startsWith("Reminder:")).length === remindersBefore + 1, "scheduled model execution and phone delivery");
+  await until(async () => ((await rpc("cron.runs", { id: job.id, limit: 10 })) as any).entries?.some((entry: any) => entry.action === "finished" && entry.status === "ok"), "resumed reminder run completion");
   await rpc("cron.remove", { id: job.id });
   await assert.rejects(rpc("cron.get", { id: job.id }));
   record("reminder execution and cancellation", "resumed job invokes model and delivers once to the owner; removal confirmed by scheduler");
@@ -287,6 +366,111 @@ try {
     else await updateExperience(gate.scope, context.assertInvocationCurrent, state => { state.paused = false; });
     record(gate.check, gate.result);
   }
+  const alertControl: any = await rpc("cron.add", { name: "Unpaused failure alert", agentId: "main", sessionKey: context.sessionKey, enabled: true, deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "CANCEL_CRON_ACCEPTANCE", toolsAllow: [] }, delivery: { mode: "announce", channel: "plow", to: home.uid, accountId: "chat" }, failureAlert: { after: 1, cooldownMs: 0, channel: "last", to: home.uid, accountId: "chat" } });
+  await rpc("cron.run", { id: alertControl.id, mode: "force" });
+  await until(() => cancelReminderStarted, "unpaused failure-alert positive-control request");
+  const beforeAlert = outbound.length;
+  await rpc("cron.update", { id: alertControl.id, patch: { enabled: false } });
+  await until(() => cancelReminderClosed && outbound.slice(beforeAlert).some(value => value.chat === home.uid && value.body.includes("Unpaused failure alert")), "unpaused cancelled run announces its failure through channel:last resolving to Plow");
+  assert.equal(outbound.length, beforeAlert + 1);
+  await rpc("cron.remove", { id: alertControl.id });
+  record("unpaused failure alert", "a native abort produces one alert through the resolved Plow route when delivery is allowed");
+  cancelReminderStarted = false; cancelReminderClosed = false;
+  const cancellable: any = await rpc("cron.add", { name: "Active run pause and failure alert", agentId: "main", sessionKey: context.sessionKey, enabled: true, deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "CANCEL_CRON_ACCEPTANCE", toolsAllow: [] }, delivery: { mode: "announce", channel: "plow", to: home.uid, accountId: "chat" }, failureAlert: { after: 1, cooldownMs: 0, channel: "plow", to: home.uid, accountId: "chat" } });
+  await rpc("cron.run", { id: cancellable.id, mode: "force" });
+  await until(() => cancelReminderStarted, "active scheduled model request");
+  const beforeCancel = outbound.length;
+  await message(home.uid, "PAUSE_ACTIVE_CRON_ACCEPTANCE: pause scheduled notifications everywhere", owner);
+  await until(() => cancelReminderClosed && outbound.some(value => value.body === "Scheduled notifications are paused; direct replies still work."), "owner pause disables cron and aborts its active provider request");
+  await until(async () => {
+    const view: any = await rpc("cron.get", { id: cancellable.id });
+    return (view.state ?? view).lastFailureNotificationDeliveryStatus === "not-delivered";
+  }, "cancelled run's failure announcement settles behind the pause gate");
+  assert.equal((await readExperience(allScope)).paused, true);
+  assert.equal((await rpc("cron.get", { id: cancellable.id }) as any).enabled, false);
+  assert.deepEqual(outbound.slice(beforeCancel).map(value => value.body), ["Scheduled notifications are paused; direct replies still work."]);
+  await rpc("cron.remove", { id: cancellable.id });
+  await notificationControl(scheduler, allScope, context, "resume", true);
+  record("native active reminder cancellation", "verified owner tool pause uses native disable to abort the provider request; its failure alert is suppressed while the direct acknowledgement still delivers");
+  // Previous cancellation cases leave deliberately undelivered in-memory
+  // system events for jobs the fixture has removed. Isolate the new paired
+  // control with a normal gateway restart; missing-job notices fail closed.
+  await stop(); await start();
+  // Remove optional heartbeat throttling as a confounder: compare native
+  // fallback custody with an allowed control and a paused creator room.
+  await updateExperience(allScope, context.assertInvocationCurrent, state => { state.preferences.notificationMinIntervalMinutes = 0; });
+  const safetySource = { account, conversation: group.uid };
+  const safetyDestination = { account, conversation: alertDestination.uid };
+  for (const { sourcePaused, destinationPaused } of [{ sourcePaused: false, destinationPaused: false }, { sourcePaused: true, destinationPaused: false }, { sourcePaused: false, destinationPaused: true }]) {
+    if (destinationPaused) { await stop(); await start(); }
+    cancelReminderStarted = false; cancelReminderClosed = false; safetyHeartbeatAt = 0;
+    await updateExperience(safetySource, context.assertInvocationCurrent, state => { state.paused = sourcePaused; });
+    await updateExperience(safetyDestination, context.assertInvocationCurrent, state => { state.paused = destinationPaused; });
+    const safetyName = destinationPaused ? "SAFETY_FALLBACK_ACCEPTANCE_DESTINATION" : sourcePaused ? "SAFETY_FALLBACK_ACCEPTANCE_PAUSED" : "SAFETY_FALLBACK_ACCEPTANCE_UNPAUSED";
+    const safety: any = await rpc("cron.add", { name: safetyName, agentId: "main", sessionKey: `agent:main:plow:chat:group:${group.uid}`, enabled: true, deleteAfterRun: false, schedule: { kind: "at", at: new Date(Date.now() + 3600_000).toISOString() }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "CANCEL_CRON_ACCEPTANCE", toolsAllow: [] }, delivery: { mode: "announce", channel: "plow", to: alertDestination.uid, accountId: "chat" }, failureAlert: { after: 1, cooldownMs: 0, channel: "plow", to: alertDestination.uid, accountId: "chat" } });
+    await rpc("cron.run", { id: safety.id, mode: "force" });
+    await until(() => cancelReminderStarted, "source-room safety run starts");
+    const beforeSafety = outbound.length;
+    await rpc("cron.update", { id: safety.id, patch: { enabled: false } });
+    await until(async () => (await rpc("cron.get", { id: safety.id }) as any).state?.lastFailureNotificationDeliveryStatus === "not-delivered", "primary failure alert cannot reach its destination");
+    await until(() => safetyHeartbeatAt > 0, "native fallback event reaches heartbeat model");
+    await until(async () => {
+      const event: any = await rpc("last-heartbeat", {});
+      return event?.ts >= safetyHeartbeatAt && ["sent", "failed", "skipped", "ok-empty", "ok-token"].includes(event.status);
+    }, "native fallback heartbeat reaches its terminal delivery outcome");
+    const body = destinationPaused ? "Safety notice for the paused destination." : sourcePaused ? "Safety notice from the paused source room." : "Safety notice from the unpaused source room.";
+    // Other already-queued owner events may settle after resume; track this
+    // uniquely named native notice rather than counting unrelated traffic.
+    const related = outbound.slice(beforeSafety).filter(value => value.body === body || value.body.includes(safetyName));
+    safetyOutcomes.push({ sourcePaused, destinationPaused, event: await rpc("last-heartbeat", {}), outbound: outbound.slice(beforeSafety), related });
+    if (sourcePaused || destinationPaused) assert.deepEqual(related, [], "a fallback safety heartbeat cannot bypass its source or original destination pause");
+    else assert.deepEqual(related.map(value => ({ chat: value.chat, body: value.body })), [{ chat: home.uid, body }], "unpaused fallback must actually deliver once to establish the control");
+    await rpc("cron.remove", { id: safety.id });
+    record(destinationPaused ? "destination safety fallback" : sourcePaused ? "source-room safety fallback" : "unpaused safety fallback", sourcePaused || destinationPaused ? "native suppressed alert reaches system-event/heartbeat custody without bypassing its paused scope" : "a primary alert cancelled by an independent fixture send policy becomes one native fallback delivery while its scopes are unpaused");
+  }
+  await updateExperience(safetySource, context.assertInvocationCurrent, state => { state.paused = false; });
+  await updateExperience(safetyDestination, context.assertInvocationCurrent, state => { state.paused = false; });
+  // Exercise the actual native circuit breaker, with distinct responses and a
+  // normal restart separating it from the earlier deliberately unsent notices.
+  await stop(); await start();
+  for (const sourcePaused of [false, true]) {
+    safetyHeartbeatAt = 0;
+    await updateExperience(safetySource, context.assertInvocationCurrent, state => { state.paused = sourcePaused; });
+    const name = sourcePaused ? "AUTO_DISABLED_SAFETY_PAUSED" : "AUTO_DISABLED_SAFETY_UNPAUSED";
+    const job: any = await rpc("cron.add", { name, agentId: "main", sessionKey: `agent:main:plow:chat:group:${group.uid}`, enabled: true,
+      schedule: { kind: "every", everyMs: 3600_000 }, sessionTarget: "isolated", wakeMode: "now", payload: { kind: "agentTurn", message: "AUTO_DISABLED_RUN", toolsAllow: [] },
+      delivery: { mode: "none" }, failureAlert: false });
+    const before = outbound.length;
+    for (let attempt = 1; attempt <= 9; attempt++) {
+      await rpc("cron.run", { id: job.id, mode: "force" });
+      await until(async () => ((await rpc("cron.get", { id: job.id })) as any).state?.consecutiveErrors >= attempt, "permanent native run failure is recorded");
+    }
+    // Forced runs preserve the schedule and its backoff. The native startup
+    // repair also counts a genuinely interrupted run, without a fake clock.
+    autoDisableInterruptStarted = false;
+    await rpc("cron.update", { id: job.id, patch: { payload: { kind: "agentTurn", message: "AUTO_DISABLED_INTERRUPT", toolsAllow: [] } } });
+    await rpc("cron.run", { id: job.id, mode: "force" });
+    await until(() => autoDisableInterruptStarted, "native run remains in flight before crash");
+    assert.ok(child); const crashed = once(child, "exit"); child.kill("SIGKILL"); await crashed;
+    await start(true);
+    await until(async () => {
+      const repaired: any = await rpc("cron.get", { id: job.id });
+      return repaired.enabled === false && repaired.state?.runningAtMs === undefined
+        && repaired.state?.consecutiveErrors === 10 && repaired.state?.autoDisabled?.reason === "consecutive-failures";
+    }, "asynchronous native startup repair disables the interrupted job");
+    const view: any = await rpc("cron.get", { id: job.id });
+    assert.equal(view.enabled, false); assert.equal(view.state.autoDisabled.consecutiveErrors, 10);
+    await until(() => safetyHeartbeatAt > 0, "native auto-disabled event reaches heartbeat model");
+    await until(async () => { const event: any = await rpc("last-heartbeat", {}); return event?.ts >= safetyHeartbeatAt && ["sent", "failed", "skipped", "ok-empty", "ok-token"].includes(event.status); }, "auto-disabled heartbeat settles");
+    const body = sourcePaused ? "Auto-disabled notice from the paused source room." : "Auto-disabled notice from the unpaused source room.";
+    const related = outbound.slice(before).filter(value => value.body === body || value.body.includes(name));
+    safetyOutcomes.push({ kind: "auto-disabled", sourcePaused, event: await rpc("last-heartbeat", {}), outbound: outbound.slice(before), related });
+    assert.deepEqual(related.map(value => ({ chat: value.chat, body: value.body })), sourcePaused ? [] : [{ chat: home.uid, body }]);
+    await rpc("cron.remove", { id: job.id });
+    record(sourcePaused ? "paused auto-disabled notice" : "unpaused auto-disabled notice", "nine failed native runs and one actual crash-interrupted run trigger startup circuit-breaker repair; its system-event/heartbeat delivery obeys the creator room's pause");
+  }
+  await updateExperience(safetySource, context.assertInvocationCurrent, state => { state.paused = false; });
+  await updateExperience(allScope, context.assertInvocationCurrent, state => { delete state.preferences.notificationMinIntervalMinutes; });
   await message(home.uid, "WORKER_START: do a bounded background analysis of dinner options", owner);
   await until(() => !!releaseWorker, "native background worker start");
   await message(home.uid, "WORKER_PING: are you available while the analysis runs?", owner);
@@ -316,14 +500,15 @@ try {
   assert.equal((await settings({ action: "reset", revision: saved.revision })).status, 200);
   assert.equal((await (await settings()).json()).sliders["playful-serious"], 80);
   record("builder defaults", "reset removes owner override and restores the image's slider defaults");
-  const output = process.env.PLOW_ACCEPTANCE_OUTPUT;
-  if (output) await writeFile(output, JSON.stringify({ kind: "real pinned gateway with local Plow/model fixtures; no external messages", evidence, outbound, modelRequests: modelRequests.map(value => ({ model: value.model, image: JSON.stringify(value.messages).includes("image_url") })) }, null, 2) + "\n");
+  completed = true;
   if (process.env.PLOW_ACCEPTANCE_SERVE === "1") {
     // tests/compose.acceptance.yml uses the existing local-dev Caddy boundary.
     console.log("ACCEPTANCE_GATEWAY_READY");
     await once(process, "SIGTERM");
   }
 } finally {
+  const output = process.env.PLOW_ACCEPTANCE_OUTPUT;
+  if (output) await writeFile(output, JSON.stringify({ kind: "real pinned gateway with local Plow/model fixtures; no external messages", completed, evidence, outbound, safetyOutcomes, modelRequests: modelRequests.map(value => ({ model: value.model, image: JSON.stringify(value.messages).includes("image_url"), messages: value.messages })), logTail: log.slice(-12_000) }, null, 2) + "\n");
   releaseReminder?.();
   releaseWorker?.();
   await stop();

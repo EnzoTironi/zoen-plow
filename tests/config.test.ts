@@ -22,6 +22,67 @@ async function configFixture(t: TestContext) {
   return { path: join(dir, "openclaw.json"), includes: join(dir, "includes") };
 }
 
+test("fresh installs disable automatic workspace memory and skill mutation through restart", async t => {
+  const fixture = await configFixture(t), rendered = renderConfig(identity, "http://fixture");
+  await syncConfig(rendered, fixture.path, fixture.includes);
+  const first = await readFile(fixture.path, "utf8");
+  const config = JSON5.parse(first);
+  assert.equal(config.plugins.entries["memory-core"].config.dreaming.enabled, false);
+  assert.equal(config.agents.defaults.compaction.memoryFlush.enabled, false);
+  assert.equal(config.skills.workshop.autonomous.mode, "off");
+  await syncConfig(rendered, fixture.path, fixture.includes);
+  assert.equal(await readFile(fixture.path, "utf8"), first);
+});
+
+test("legacy partial maintenance settings receive narrow defaults without losing siblings", async t => {
+  const fixture = await configFixture(t);
+  await writeFile(fixture.path, JSON.stringify({
+    plugins: { entries: { "memory-core": { enabled: false, config: { dreaming: { timezone: "UTC" } } } } },
+    agents: { defaults: { compaction: { reserveTokens: 15000, memoryFlush: { softThresholdTokens: 3000 } } } },
+    skills: { workshop: { approvalPolicy: "pending" } },
+  }));
+  await syncConfig(renderConfig(identity, "http://fixture"), fixture.path, fixture.includes);
+  const config = JSON5.parse(await readFile(fixture.path, "utf8"));
+  assert.deepEqual(config.plugins.entries["memory-core"], { enabled: false, config: { dreaming: { timezone: "UTC", enabled: false } } });
+  assert.deepEqual(config.agents.defaults.compaction, { reserveTokens: 15000, memoryFlush: { softThresholdTokens: 3000, enabled: false } });
+  assert.deepEqual(config.skills.workshop, { approvalPolicy: "pending", autonomous: { mode: "off" } });
+});
+
+test("explicit native maintenance choices remain unchanged on repeated boots", async t => {
+  for (const mode of ["off", "propose", "auto"]) {
+    const fixture = await configFixture(t);
+    await writeFile(fixture.path, JSON.stringify({
+      plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } },
+      agents: { defaults: { compaction: { memoryFlush: { enabled: true } } } },
+      skills: { workshop: { autonomous: { mode } } },
+    }));
+    const rendered = renderConfig(identity, "http://fixture");
+    await syncConfig(rendered, fixture.path, fixture.includes);
+    await syncConfig(rendered, fixture.path, fixture.includes);
+    const config = JSON5.parse(await readFile(fixture.path, "utf8"));
+    assert.equal(config.plugins.entries["memory-core"].config.dreaming.enabled, true);
+    assert.equal(config.agents.defaults.compaction.memoryFlush.enabled, true);
+    assert.equal(config.skills.workshop.autonomous.mode, mode);
+  }
+});
+
+test("owner maintenance includes remain opaque and are not overwritten by defaults", async t => {
+  const fixture = await configFixture(t);
+  const memory = { $include: "/owner-memory-core.json5" };
+  const compaction = { $include: "/owner-compaction.json5" };
+  const workshop = { $include: "/owner-workshop.json5" };
+  await writeFile(fixture.path, JSON.stringify({
+    plugins: { entries: { "memory-core": memory } },
+    agents: { defaults: { compaction } },
+    skills: { workshop },
+  }));
+  await syncConfig(renderConfig(identity, "http://fixture"), fixture.path, fixture.includes);
+  const config = JSON5.parse(await readFile(fixture.path, "utf8"));
+  assert.deepEqual(config.plugins.entries["memory-core"], memory);
+  assert.deepEqual(config.agents.defaults.compaction, compaction);
+  assert.deepEqual(config.skills.workshop, workshop);
+});
+
 test("fresh groups allow intentional model silence while existing owner policy survives restart", async t => {
   const fixture = await configFixture(t), rendered = renderConfig(identity, "http://fixture");
   await syncConfig(rendered, fixture.path, fixture.includes);
@@ -38,7 +99,7 @@ test("only the owner's phone DM becomes main; other peers and groups stay isolat
   assert.ok(!("ownerChatUid" in config.channels.plow));
   assert.ok(!("ownerMemberUid" in config.channels.plow));
   assert.deepEqual(config.commands.ownerAllowFrom, ["plow-owner"]);
-  assert.deepEqual(config.agents.defaults.heartbeat, { target: "plow", to: "plow-heartbeat", accountId: "chat" }, "heartbeats reach the owner through an alias their sends are marked by");
+  assert.deepEqual(config.agents.defaults.heartbeat, { agentId: "main", target: "plow", to: "plow-heartbeat", accountId: "chat" }, "only the conversational agent's heartbeats reach the owner through a marked alias");
   assert.equal(config.session.dmScope, "per-account-channel-peer");
   assert.equal(config.session.groupScope, "per-group");
   assert.deepEqual(config.bindings[0], {
@@ -238,7 +299,7 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
   assert.equal(JSON5.parse(await readFile(owner.messages.inbound.byChannel.plow.$include, "utf8")), 2000);
   assert.equal(owner.agents.defaults.model.primary, "extra/model");
   assert.equal(JSON5.parse(await readFile(owner.agents.defaults.timeoutSeconds.$include, "utf8")), 600);
-  assert.deepEqual(owner.agents.defaults.heartbeat, { every: "1h", target: "plow", to: "plow-heartbeat", accountId: "chat" }, "rebuilt agents get the marked route and keep their cadence");
+  assert.deepEqual(owner.agents.defaults.heartbeat, { every: "1h", agentId: "main", target: "plow", to: "plow-heartbeat", accountId: "chat" }, "rebuilt agents get the marked main-agent route and keep their cadence");
   assert.deepEqual(owner.agents.entries.main.identity, { $include: join(includes, "identity.json5") });
   assert.equal(owner.agents.entries.main.default, undefined);
   assert.ok(owner.agents.entries["plow-worker"].$include);
@@ -261,14 +322,29 @@ test("restart migrates a full render and keeps owner edits outside Plow-owned pa
 
 test("an owner who routed heartbeats elsewhere, or silenced them, keeps that choice on restart", async t => {
   const { path, includes } = await configFixture(t);
-  for (const choice of [{ target: "none" }, { target: "last", every: "2h" }]) {
+  for (const choice of [{ target: "none" }, { target: "last", every: "2h" }, { agentId: "custom-agent", target: "last", every: "2h" }]) {
     const old = renderConfig(identity, "http://api:8000") as Record<string, any>;
     old.agents.defaults.heartbeat = choice;
     await writeFile(path, JSON.stringify(old));
     await syncConfig(renderConfig(identity, "http://api:8000"), path, includes);
-    assert.deepEqual(JSON5.parse(await readFile(path, "utf8")).agents.defaults.heartbeat, choice);
+    assert.deepEqual(JSON5.parse(await readFile(path, "utf8")).agents.defaults.heartbeat, { agentId: "main", ...choice });
   }
 });
+
+for (const route of [{ target: "owner" }, {}]) {
+  test(`legacy ${route.target ?? "implicit owner"} heartbeat migration preserves an explicit agent selector`, async t => {
+    const { path, includes } = await configFixture(t);
+    const rendered = renderConfig(identity, "http://api:8000");
+    const old = renderConfig(identity, "http://old-api:8000") as Record<string, any>;
+    old.agents.defaults.heartbeat = { every: "45m", agentId: "plow-worker", ...route };
+    await writeFile(path, JSON.stringify(old));
+    const expected = { ...rendered.agents.defaults.heartbeat, every: "45m", agentId: "plow-worker" };
+    await syncConfig(rendered, path, includes);
+    assert.deepEqual(JSON5.parse(await readFile(path, "utf8")).agents.defaults.heartbeat, expected);
+    await syncConfig(rendered, path, includes);
+    assert.deepEqual(JSON5.parse(await readFile(path, "utf8")).agents.defaults.heartbeat, expected, "the migrated owner selection survives later restarts");
+  });
+}
 
 test("MCP Plow server include disappears without a relay while owner MCP settings remain", async t => {
   const { path, includes } = await configFixture(t);
