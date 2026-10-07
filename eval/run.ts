@@ -5,8 +5,8 @@ import { z } from "zod";
 import { renderConfig } from "../boot/config.ts";
 import { agentDefinitionSchema } from "../boot/extensions.ts";
 import { composePrompt, renderPrompt } from "../boot/prompt.ts";
-import { personalitySchema, personalityInstructions } from "../boot/personality.ts";
-import { assertsPhrase } from "./assertions.ts";
+import { personalityInstructions } from "../boot/personality.ts";
+import { scenarioSchema, dialogueChecks } from "./scenarios.ts";
 
 const args = process.argv.slice(2);
 const options = new Set(["--credentials", "--cases", "--case", "--model", "--repeat", "--output", "--reasoning", "--max-tokens"]);
@@ -32,7 +32,6 @@ if (credentials) for (const line of (await readFile(credentials, "utf8")).split(
   if (match) env[match[1]] = match[2].trim().replace(/^['"]|['"]$/g, "");
 }
 if (!env.PLOW_API_BASE || !env.PLOW_AGENT_TOKEN) throw new Error("Provide PLOW_API_BASE/PLOW_AGENT_TOKEN or --credentials PATH. Credentials are never included in reports.");
-const scenarioSchema = z.object({ id: z.string().min(1), category: z.string().optional(), review: z.array(z.string()).optional(), personality: personalitySchema.optional(), facts: z.record(z.string(), z.unknown()), messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }).strict()).min(1), contains: z.array(z.string()).optional(), excludes: z.array(z.string()).optional(), doesNotAssert: z.array(z.string()).optional(), anyOf: z.array(z.string()).optional(), silent: z.boolean().optional(), maxChars: z.number().positive().optional() }).strict();
 const casesPath = option("--cases");
 const casesSource = await readFile(casesPath ? resolve(casesPath) : new URL("./cases.json", import.meta.url), "utf8");
 const allCases = z.array(scenarioSchema).min(1).parse(JSON.parse(casesSource));
@@ -90,13 +89,7 @@ evaluation: for (const model of models) for (const scenario of cases) for (let r
     }
     if (!result) throw new Error("Model returned no result");
     const text = result.choices[0].message.content?.trim() ?? "";
-    const checks = { nonempty: !!text, noToolCalls: !result.choices[0].message.tool_calls?.length,
-      silence: !scenario.silent || text.replace(/^[.*_ `]+|[.*_ `]+$/g, "") === "NO_REPLY",
-      contains: (scenario.contains ?? []).every(value => text.toLowerCase().includes(value.toLowerCase())),
-      excludes: (scenario.excludes ?? []).every(value => !text.toLowerCase().includes(value.toLowerCase())),
-      doesNotAssert: (scenario.doesNotAssert ?? []).every(value => !assertsPhrase(text, value)),
-      anyOf: !scenario.anyOf || scenario.anyOf.some(value => text.toLowerCase().includes(value.toLowerCase())),
-      length: !scenario.maxChars || text.length <= scenario.maxChars };
+    const checks = dialogueChecks(scenario, text, !!result.choices[0].message.tool_calls?.length);
     const passed = Object.values(checks).every(Boolean);
     if (!passed) failures++;
     results.push({ model: model.id, scenario: scenario.id, repetition, passed, checks, input: scenario.messages, output: text, attempts, latencyMs: Date.now() - start, usage: result.usage,

@@ -102,6 +102,57 @@ can help identify contradictions and poor wording, but its review is not human
 approval. The [experience validation SOP](../docs/experience-validation.md)
 connects the dialogue rubric to real installation checks and fault tests.
 
+## Optional Codex ChatGPT diagnostics with Luna
+
+`run-codex.ts` uses the pinned OpenClaw subscription Responses provider and
+`gpt-6-luna`, with medium reasoning by default, SSE and low verbosity.
+Use `--reasoning high` for a controlled comparison with the same frozen inputs;
+the report records the chosen effort. Neither effort changes production settings. This is an explicit
+diagnostic path. It neither replaces the base's GLM/Sonnet defaults nor falls
+back to another model or provider.
+
+Only use a login you are authorized to use. Codex authentication files are
+credentials; the official [authentication guidance](https://learn.chatgpt.com/docs/auth)
+describes using a trusted copied cache in a headless environment. Copy the file
+into a private temporary directory, outside Git and Docker build contexts:
+
+```sh
+lab_auth_dir=$(mktemp -d)
+chmod 700 "$lab_auth_dir"
+cp "$HOME/.codex/auth.json" "$lab_auth_dir/auth.json"
+chmod 600 "$lab_auth_dir/auth.json"
+node eval/run-codex.ts --codex-home "$lab_auth_dir" \
+  --cases eval/cases.json,eval/experience-cases.json \
+  --repeat 3 --concurrency 2 --output /TMP/luna-round-1.json \
+  --source-revision "$(git rev-parse HEAD)"
+rm -rf "$lab_auth_dir"
+```
+
+Install repository dependencies first with `npm ci --ignore-scripts`; use the
+supported Node runtime. The commands read the copied login only. They do not
+refresh or change the source login, run tools, send messages or register a listing.
+An expired copy fails before evaluation; refresh the isolated copy through the
+supported CLI before trying again. Never paste tokens into a prompt or PR.
+
+`--cases` accepts comma-separated files with the same strict scenario schema.
+`--case` selects one ID, `--repeat` accepts 1–5 and `--concurrency` accepts 1–3.
+Start with one case to confirm model access. Concurrency changes simultaneous
+requests, not the number of planned completions. Use a new output path for every
+round: this runner rejects an existing report before any model call. It also
+rejects unknown/duplicate options and malformed scenarios before model calls.
+
+Reports checkpoint every result and retain source/prompt/case hashes, provider,
+reported model, usage, latency, failures and unrun combinations. Authentication,
+quota or rate-limit failures stop new work; already in-flight requests may finish.
+The runner adds no outer retry or fallback. The native provider may handle
+transport retries internally. Preserve those failures and their evidence.
+
+The subscription transport does not enforce the Plow evaluator's `max_tokens`
+cap. Reports explicitly record `effectiveMaxTokens: null` and unknown cost,
+rather than treating an absent price as free. Keep those conditions separate
+from GLM/Sonnet comparisons. Literal passes require qualitative review and the
+real tool journeys in the [experience validation SOP](../docs/experience-validation.md).
+
 ## Canonical scenarios and historical reports
 
 A decision has one maintained fixture. The original matrix keeps its messages,
