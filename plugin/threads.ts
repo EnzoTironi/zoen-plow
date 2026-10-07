@@ -1,8 +1,8 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
-import { createHash } from "node:crypto";
-import { request, requestDelivery, findOwnerChat, DeliveryUnknownError, type Account, type Chat } from "./transport.ts";
+import { threadIdempotencyKey } from "./delivery-guard.ts";
+import { request, requestDelivery, isSilent, findOwnerChat, DeliveryUnknownError, type Account, type Chat } from "./transport.ts";
 
-export type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner">;
+export type Requester = Pick<OpenClawPluginToolContext, "sessionKey" | "messageChannel" | "agentAccountId" | "nativeChannelId" | "deliveryContext" | "requesterSenderId" | "senderIsOwner" | "assertInvocationCurrent">;
 export function conversationUid(context: Requester): string | undefined {
   return (context.nativeChannelId ?? context.deliveryContext?.to)?.replace(/^plow:/i, "");
 }
@@ -12,6 +12,7 @@ export async function ownerDmTurn(account: Account, context: Requester): Promise
     || context.agentAccountId !== "chat" || !uid || !context.requesterSenderId) throw new Error("This action requires the owner's main Plow DM.");
   const chat = await request<Chat>(account, `/chats/${encodeURIComponent(uid)}`);
   if (findOwnerChat(account, [chat]) !== chat) throw new Error("This action requires the owner's main Plow DM.");
+  context.assertInvocationCurrent?.();
   return { chat };
 }
 
@@ -30,14 +31,16 @@ function groupTrust(account: Account, choice: boolean | undefined): boolean {
 // Shared by the native tool and image-installed workflow plugins. Callers
 // retain the active owner-DM gate, trust policy and stable API idempotency key.
 export async function startThread(account: Account, context: Requester, callId: string, args: { members: string[]; body: string; trusted?: boolean }): Promise<{ chat_uid: string; message_sent: true }> {
+  if (isSilent(args.body)) throw new Error("Nothing was sent: the message is the NO_REPLY silence marker.");
   const turn = await ownerDmTurn(account, context);
   if (!callId || !args.body.trim() || !args.members.length) throw new Error("A thread needs a stable call ID, recipients and a first message.");
   const owner = turn.chat.participants.find(value => value.type === "member" && value.role === "owner");
   if (owner?.type !== "member" || !owner.provider_key) throw new Error("The owner's chat has no owner handle");
   const members = [...new Set([threadHandle(owner.provider_key), ...args.members.map(threadHandle)])].sort();
   const trusted = groupTrust(account, args.trusted);
-  const idempotencyKey = createHash("sha256").update(JSON.stringify([account.lineUid, callId, members, args.body, trusted])).digest("hex");
-  const chat = await requestDelivery<{ uid: string }>(account, "/chats", { line_uid: account.lineUid, members, body: args.body, trusted, idempotency_key: idempotencyKey });
-  if (!chat.uid) throw new DeliveryUnknownError();
+  const idempotencyKey = threadIdempotencyKey(callId, [account.lineUid, members, args.body, trusted]);
+  context.assertInvocationCurrent?.();
+  const chat = await requestDelivery<{ uid?: unknown } | null>(account, "/chats", { line_uid: account.lineUid, members, body: args.body, trusted, idempotency_key: idempotencyKey });
+  if (typeof chat?.uid !== "string" || !chat.uid.trim()) throw new DeliveryUnknownError();
   return { chat_uid: chat.uid, message_sent: true };
 }
